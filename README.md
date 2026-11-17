@@ -1,96 +1,124 @@
-# Antigravity Milk UI Mod
+<div align="center">
 
-Мод оформления и телеметрии для **Google Antigravity IDE** (Windows, Electron 44+ / v2.32+):
+<img src="./wallpapers/04_milk_balcony.png" alt="Antigravity Milk UI Mod — Balcony Wallpaper" width="100%" />
 
-- **Динамический движок обоев** (`.png`, `.jpg`, `.webp`, `.gif`, `.mp4`, `.webm`) из `%USERPROFILE%\.gemini\antigravity\wallpapers`:
-  - автоматическое извлечение цветовой палитры (акцент, свечение, спотлайт, частицы) прямо из текущих обоев;
-  - отдельные закрепления обоев для главного экрана (`Home`) и чата (`Чат`), авторотация, слайдер затемнения фона;
-  - атмосферные эффекты: 240 пиксельных частиц, параллакс и дыхание камеры, тёплый спотлайт за курсором, CRT-сканлайны и VHS-переключение каналов;
-  - полупрозрачные стеклянные карточки сообщений, поля ввода (с пульсацией при работе ИИ и подсветкой по завершении), боковой панели и верхнего бара, а также удержание широких Markdown-таблиц внутри карточки чата.
-- **Нижняя панель телеметрии сессии**:
-  - `turns` / `steps` / скорость `tok/s` (живой расчёт + спарклайн скорости в поповере);
-  - текущий контекст (`lastInput + lastCache`), Cache Hit %, общий объём токенов за сессию (включая всех субагентов), % заполнения окна (`1M`);
-  - расчёт стоимости API (`Input / Cache / Output`, чат + субагенты) и активное время работы ИИ (без простоя ожидания пользователя);
-  - **Инспектор контекста** (разбивка вызовов инструментов, топ тулзов, список прочитанных/изменённых файлов);
-  - **Карта роя субагентов** (интерактивное масштабируемое SVG-дерево вызовов `invoke_subagent`).
+# 🩸 Antigravity Milk UI Mod
 
-> **Важно про модели:** в текущей конфигурации оставлены только **Gemini 3.8 Flash**, **Gemini 4 Hydrogen**, **Gemini 4 Argon** и **Gemini 4 Carbon** (окно `1M`). Если нужны другие модели (Claude, GPT и т.д.), попросите своего ИИ-агента расширить `modelPattern` и `__resolveModelPricing` по инструкции ниже.
+**Атмосферная тема, движок живых обоев и real-time телеметрия токенов, скорости и роя субагентов для Google Antigravity IDE**
+
+![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-c6343c?style=for-the-badge)
+![Target](https://img.shields.io/badge/Antigravity-v2.32%2B%20%7C%20Electron%2044%2B-18181b?style=for-the-badge&labelColor=c6343c)
+![Models](https://img.shields.io/badge/Gemini-3.8%20Flash%20%7C%20Hydrogen%20%7C%20Argon%20%7C%20Carbon-8b222a?style=for-the-badge)
+![Wallpapers](https://img.shields.io/badge/Wallpapers-5%20Included-18181b?style=for-the-badge&labelColor=8b222a)
+
+[✨ Возможности](#-возможности) • [🖼 Галерея обоев](#-галерея-обоев) • [⚡ Быстрая установка](#-быстрая-установка) • [🤖 Инструкция для ИИ-агента](#-инструкция-для-ии-агента)
+
+</div>
 
 ---
 
-## Быстрая установка для человека (Windows)
+## ✨ Возможности
+
+| 🎨 Визуал и движок обоев | 📊 Панель телеметрии и роя |
+|---|---|
+| **Фото и видео-обои** (`.png`, `.jpg`, `.webp`, `.gif`, `.mp4`, `.webm`) из `%USERPROFILE%\.gemini\antigravity\wallpapers` | **Метрики в реальном времени:** `turns`, `steps`, скорость `tok/s` (медиана + спарклайн) и активное время работы ИИ |
+| **Авто-палитра из обоев:** цвета акцента, свечения, частиц, скроллбара и рамки автоматически подстраиваются под картинку | **Контекст и кэш:** текущий контекст (`Input + Cache`), Cache Hit %, общий оборот токенов за сессию и `%` от окна `1M` |
+| **Раздельные пины и эффекты:** отдельные обои для `Home` и `Чат`, авторотация, слайдер затемнения, 240 пиксельных частиц, параллакс камеры, спотлайт за курсором, CRT-сканлайны и VHS-переключение | **Стоимость API:** подробная разбивка `Input / Cache / Output` отдельно по основному чату и субагентам |
+| **Стеклянный UI + ровные таблицы:** карточки сообщений и инпута с пульсацией при генерации ИИ, плюс удержание широких Markdown-таблиц строго внутри рамки чата | **Инспектор контекста и карта роя:** топ инструментов, список прочитанных/изменённых файлов и интерактивное SVG-дерево субагентов `invoke_subagent` |
+
+> **Поддержка моделей:** в текущей сборке оставлены **Gemini 3.8 Flash**, **Gemini 4 Hydrogen**, **Gemini 4 Argon** и **Gemini 4 Carbon** (окно `1M`). Если вам нужны другие модели (Claude, GPT и т.д.), попросите ИИ-агента расширить `modelPattern` и `__resolveModelPricing` по секции ниже.
+
+---
+
+## 🖼 Галерея обоев
+
+В комплекте уже лежат 5 обоев в папке [`wallpapers/`](./wallpapers) — свои можно докинуть туда же в любой момент (кнопка открытия папки встроена прямо в меню обоев справа внизу).
+
+<details>
+<summary><b>Показать все 5 встроенных обоев</b></summary>
+<br />
+
+| `01_milk_room.png` | `02_milk_mirror_brush.png` | `03_milk_mirror_look.png` |
+| :---: | :---: | :---: |
+| <img src="./wallpapers/01_milk_room.png" alt="01_milk_room" width="260" /> | <img src="./wallpapers/02_milk_mirror_brush.png" alt="02_milk_mirror_brush" width="260" /> | <img src="./wallpapers/03_milk_mirror_look.png" alt="03_milk_mirror_look" width="260" /> |
+
+| `04_milk_balcony.png` | `05_milk_floor.png` |
+| :---: | :---: |
+| <img src="./wallpapers/04_milk_balcony.png" alt="04_milk_balcony" width="260" /> | <img src="./wallpapers/05_milk_floor.png" alt="05_milk_floor" width="260" /> |
+
+</details>
+
+---
+
+## ⚡ Быстрая установка
 
 ### Требования
-- Windows 10/11
+- **Windows 10 / 11**
 - Установленный **Antigravity** в `%LOCALAPPDATA%\Programs\Antigravity`
-- **Node.js** (LTS, команда `node` и `npx` в `PATH`)
+- **Node.js** (LTS, команды `node` и `npx` должны быть доступны в `PATH`)
 
-### Шаги
-1. Скачайте или клонируйте репозиторий:
+### Установка в 2 шага
+1. Клонируйте репозиторий:
    ```powershell
    git clone https://github.com/Aldiyuar/antigravity-milk-ui-mod.git
    cd antigravity-milk-ui-mod
    ```
-2. Откройте PowerShell (или дайте инструкцию ниже вашему ИИ-агенту в Antigravity) и выполните:
+2. Запустите установщик:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\install.ps1
    ```
-   Скрипт скопирует:
-   - скрипты мода → `%USERPROFILE%\.gemini\antigravity\tools\`
-   - обои (5 шт.) → `%USERPROFILE%\.gemini\antigravity\wallpapers\`
-   - батник запуска → на **Рабочий стол** (`Apply_AG_UI_Mods.bat`)
-   и соберёт пропатченный `app.asar` (оригинал сохраняется в `app.asar.bak`).
+   Скрипт разложит файлы в `%USERPROFILE%\.gemini\antigravity\{tools,wallpapers}`, положит `Apply_AG_UI_Mods.bat` на **Рабочий стол**, создаст резервную копию `app.asar.bak` и пропатчит `app.asar`.
 
-### Полезные команды батника
-- Обычный запуск `Apply_AG_UI_Mods.bat` — закрывает Antigravity, устанавливает/обновляет патч (или применяет кэш `app.asar.patched`) и запускает Antigravity.
-- `Apply_AG_UI_Mods.bat -Rebuild` — принудительно пересобрать `app.asar.patched`.
-- `Apply_AG_UI_Mods.bat -BuildOnly` — только пересобрать `app.asar.patched` без закрытия Antigravity.
-- `Apply_AG_UI_Mods.bat -Restore` — полностью откатить интерфейс к оригинальному `app.asar.bak`.
-
-Свои обои можно в любой момент закинуть в `%USERPROFILE%\.gemini\antigravity\wallpapers\` (кнопка открытия папки есть прямо в меню обоев справа внизу).
+### Команды `Apply_AG_UI_Mods.bat`
+| Команда | Что делает |
+|---|---|
+| `Apply_AG_UI_Mods.bat` | Закрывает Antigravity, ставит/обновляет патч и запускает IDE |
+| `Apply_AG_UI_Mods.bat -Rebuild` | Принудительно пересобирает кэш `app.asar.patched` |
+| `Apply_AG_UI_Mods.bat -BuildOnly` | Собирает `app.asar.patched` без закрытия Antigravity |
+| `Apply_AG_UI_Mods.bat -Restore` | Полностью откатывает интерфейс к оригинальному `app.asar.bak` |
 
 ---
 
-## Инструкция для ИИ-агента (как применить этот дизайн на чистый Antigravity)
+## 🤖 Инструкция для ИИ-агента
 
-Вы можете просто отправить своему ИИ-агенту в чистом Antigravity следующий промпт:
+Если вы хотите, чтобы ваш ИИ-агент сам установил или адаптировал этот дизайн на чистом Antigravity, просто отправьте ему этот промпт:
 
-> Прочитай `README.md` из репозитория `https://github.com/Aldiyuar/antigravity-milk-ui-mod` и примени этот UI-мод (обои, тему и панель телеметрии токенов) к моему локальному Antigravity. Перед установкой проверь пути, совместимость `app.asar` и запусти проверки (`node --check` и `-BuildOnly`), затем объясни мне, как перезапустить Antigravity для активации.
+```text
+Изучи README.md из https://github.com/Aldiyuar/antigravity-milk-ui-mod и примени этот UI-мод (обои, тему и нижнюю панель телеметрии) к моему локальному Antigravity. Перед заменой app.asar проверь пути, прогони синтаксис-проверку node --check и сборку с -BuildOnly, после чего объясни мне, как перезапустить Antigravity для активации.
+```
 
-### Техническая спецификация для ИИ-агента
+<details>
+<summary><b>Техническая спецификация для ИИ-агента (архитектура, точки патча и адаптация)</b></summary>
 
-#### 1. Структура файлов репозитория
-- `tools/antigravity_core_mod.js` — клиентский скрипт для renderer-окна Electron (DOM-наблюдение, панель токенов, поповер, SVG-карта роя, движок обоев/FX, CSS `#antigravity-milk-style`, удержание таблиц `constrainTablesInDialogBox`).
+### 1. Файлы проекта
+- `tools/antigravity_core_mod.js` — клиентский скрипт для renderer-окна Electron (DOM-наблюдение, панель токенов, поповер с инспектором контекста, SVG-карта роя, движок обоев/FX, CSS `#antigravity-milk-style`, удержание таблиц `constrainTablesInDialogBox`).
 - `tools/update_antigravity_mods.ps1` — распаковывает `%LOCALAPPDATA%\Programs\Antigravity\resources\app.asar` через `npx --yes @electron/asar`, идемпотентно патчит 3 файла в `dist/` с комментариями-маркерами `BEGIN`/`END`, проверяет синтаксис через `node`, пакует обратно с `--unpack "**/node_modules/chrome-devtools-mcp/**"` и сохраняет кэш `app.asar.patched` + `app.asar.patched.unpacked` + `.ver`.
 - `tools/restart_and_apply.ps1` — быстрая установка уже собранного `app.asar.patched` (и `.unpacked`) с перезапуском приложения.
-- `Apply_AG_UI_Mods.bat` — обёртка для запуска под Windows с UAC-элевацией (требуется, если Antigravity запущен с правами администратора), проверкой `node --check` и нормализацией флагов `-BuildOnly` / `-Rebuild` / `-Restore`.
-- `wallpapers/` — 5 PNG-обоев для темы.
-- `install.ps1` — копирует всё в `%USERPROFILE%\.gemini\antigravity\{tools,wallpapers}` и на Рабочий стол.
+- `Apply_AG_UI_Mods.bat` — Windows-обёртка с UAC-элевацией, проверкой `node --check` и нормализацией флагов `-BuildOnly` / `-Rebuild` / `-Restore`.
+- `install.ps1` — копирует скрипты и обои в `%USERPROFILE%\.gemini\antigravity\` и `Apply_AG_UI_Mods.bat` на Рабочий стол.
 
-#### 2. Точки интеграции внутри `app.asar` (что и как патчится)
-Если в более новой версии Antigravity структура `dist/` изменится и патчер бросит ошибку, ИИ-агенту нужно проверить 3 точки в распакованном `app.asar`:
+### 2. Точки интеграции внутри `app.asar`
+Если в будущей версии Antigravity структура `dist/` изменится, проверьте эти 3 патча:
 
 1. **`dist/utils.js`** (маркеры `// Antigravity Core Mod Loader BEGIN` ... `END`):
    - Вставляется сразу после `(0, loadingOverlay_1.attachLoadingOverlay)(win, foregroundColor, backgroundColor);`.
    - Вешает `win.webContents.on('did-finish-load', ...)` и выполняет `fs.readFileSync(<homedir>/.gemini/antigravity/tools/antigravity_core_mod.js, 'utf8')` через `win.webContents.executeJavaScript(modCode)`.
-   - *Плюс:* правки `antigravity_core_mod.js` не требуют пересборки `app.asar` — достаточно перезагрузить окно.
+   - Изменения в `antigravity_core_mod.js` не требуют пересборки `app.asar` — достаточно перезагрузить окно.
 2. **`dist/preload.js`** (маркеры `// Antigravity Token Bridge BEGIN` ... `END`):
-   - Пробрасывает `window.antigravityTokenBridge` через `contextBridge.exposeInMainWorld` (используя `electron_1` с фоллбэком на `require('electron')`) с методами:
+   - Пробрасывает `window.antigravityTokenBridge` через `contextBridge.exposeInMainWorld` (используя `electron_1` с фоллбэком на `require('electron')`):
      - `getStats(convId, modelName)` → `antigravity:get-token-stats`
      - `listWallpapers()` → `antigravity:list-wallpapers`
      - `readWallpaper(fileName)` → `antigravity:read-wallpaper`
      - `openWallpapersDir()` → `antigravity:open-wallpapers-dir`
 3. **`dist/ipcHandlers.js`** (маркеры `// Antigravity Token Stats IPC Handler BEGIN` ... `END`):
    - Вставляется в конец функции `registerIpcHandlers` (перед последней `}` до `//# sourceMappingURL`).
-   - Инкрементально (по `byteOffset` и кэшу `__tokenStatsCache`) читает `%USERPROFILE%\.gemini\antigravity\brain\<convId>\.system_generated\logs\transcript.jsonl` и дочерние транскрипты субагентов из `invoke_subagent`.
-   - Если формат `transcript.jsonl` изменится (поля `step_index`, `type`, `created_at`, `input_tokens`, `cache_read_tokens`, `output_tokens`, `tool_calls`), нужно обновить `__applyTranscriptLines`.
+   - Инкрементально (по `byteOffset` и кэшу `__tokenStatsCache`) читает `%USERPROFILE%\.gemini\antigravity\brain\<convId>\.system_generated\logs\transcript.jsonl` и дочерние логи субагентов.
+   - При изменении формата транскрипта обновите `__applyTranscriptLines`.
 
-#### 3. Что проверить и адаптировать агенту на чистой машине
-1. **Если пользователь не хочет запускать IDE от администратора:** в `Apply_AG_UI_Mods.bat` и `update_antigravity_mods.ps1` можно убрать `-Verb RunAs` при старте `Antigravity.exe` (для перезаписи `app.asar` в `%LOCALAPPDATA%` права админа не нужны, если сама IDE запущена от обычного пользователя; это также вернёт drag-and-drop из обычного Проводника).
-2. **Если пользователь пользуется другими моделями (Claude / GPT / DeepSeek):**
-   - в `tools/antigravity_core_mod.js` расширить `modelPattern` в `getActiveModelName`;
-   - в `tools/update_antigravity_mods.ps1` добавить нужные лимиты в `__resolveModelLimit` и тарифы в `__resolveModelPricing`.
-3. **Безопасная проверка перед заменой `app.asar`:**
-   - Сначала запустить `install.ps1 -BuildOnly` (или `update_antigravity_mods.ps1 -BuildOnly`) — это распакует текущий `app.asar` пользователя, прогонит `new Function(...)` синтаксис-чек для всех 3 патченных файлов и соберёт `app.asar.patched`, **не трогая работающий Antigravity** (важно, если сам агент запущен внутри этого Antigravity!).
-   - После сборки попросить пользователя закрыть Antigravity и запустить `Apply_AG_UI_Mods.bat` с Рабочего стола.
-4. **Откат:** `Apply_AG_UI_Mods.bat -Restore` вернёт `app.asar.bak` на место `app.asar`.
+### 3. Чеклист адаптации на чистой машине
+1. **Права администратора (опционально):** если пользователь не хочет запускать IDE от админа, уберите `-Verb RunAs` из `Apply_AG_UI_Mods.bat` и `update_antigravity_mods.ps1` (для записи в `%LOCALAPPDATA%` права админа не требуются, а отказ от `RunAs` сохранит drag-and-drop из Проводника).
+2. **Другие модели:** расширьте `modelPattern` в `getActiveModelName` (`tools/antigravity_core_mod.js`) и функции `__resolveModelLimit` / `__resolveModelPricing` (`tools/update_antigravity_mods.ps1`).
+3. **Безопасная проверка:** если агент работает внутри самого Antigravity, сначала выполните `install.ps1 -BuildOnly` (это не убьёт процесс IDE), проверьте сборку и попросите пользователя закрыть Antigravity и запустить `Apply_AG_UI_Mods.bat`.
+4. **Откат:** `Apply_AG_UI_Mods.bat -Restore` восстанавливает `app.asar.bak`.
+
+</details>
