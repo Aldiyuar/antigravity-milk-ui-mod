@@ -1473,7 +1473,7 @@
 
   const FX_PREFS_STORAGE_KEY = 'agy_milk_fx_prefs_v1';
   const DEFAULT_FX_PREFS = {
-    autoRotate: true,
+    autoRotate: false,
     particles: true,
     crt: true,
     parallax: true,
@@ -1526,22 +1526,19 @@
   let wpMenuOpenTimer = 0;
   let wpMenuPinned = false;
 
-  const PALETTE_PRESETS = [
-    { accent: '198, 52, 60', bright: '255, 68, 82', secondary: '248, 224, 192', spotlight: '245, 165, 145', dust: '196, 108, 176' },
-    { accent: '176, 48, 78', bright: '242, 74, 114', secondary: '244, 212, 220', spotlight: '235, 148, 176', dust: '158, 96, 198' },
-    { accent: '188, 66, 52', bright: '248, 96, 68', secondary: '252, 230, 194', spotlight: '250, 182, 134', dust: '188, 118, 142' },
-    { accent: '152, 56, 128', bright: '216, 92, 188', secondary: '240, 222, 246', spotlight: '216, 152, 224', dust: '232, 82, 102' },
-    { accent: '208, 44, 52', bright: '255, 64, 72', secondary: '246, 218, 186', spotlight: '248, 152, 136', dust: '172, 88, 148' }
-  ];
-  let currentDynamicPalette = { ...PALETTE_PRESETS[0] };
+  // Fixed crimson/red Milk palette used uniformly across all wallpapers
+  const RED_PALETTE = {
+    accent: '198, 52, 60',
+    bright: '255, 68, 82',
+    secondary: '248, 224, 192',
+    spotlight: '245, 165, 145',
+    dust: '224, 64, 76'
+  };
+  const PALETTE_PRESETS = [RED_PALETTE];
+  let currentDynamicPalette = { ...RED_PALETTE };
 
-  function clampByte(n) {
-    return Math.max(0, Math.min(255, Math.round(n)));
-  }
-
-  function applyDynamicPalette(palette) {
-    const p = palette || PALETTE_PRESETS[0];
-    currentDynamicPalette = { ...PALETTE_PRESETS[0], ...p };
+  function applyDynamicPalette() {
+    currentDynamicPalette = { ...RED_PALETTE };
     try {
       const rootStyle = document.documentElement && document.documentElement.style;
       if (rootStyle && typeof rootStyle.setProperty === 'function') {
@@ -1565,110 +1562,9 @@
     }
   }
 
-  function extractPaletteFromImage(imgEl, fileName, idx) {
-    const fallback = PALETTE_PRESETS[idx % PALETTE_PRESETS.length];
-    if (fileName && wallpaperPaletteCache.has(fileName)) {
-      const cached = wallpaperPaletteCache.get(fileName);
-      applyDynamicPalette(cached);
-      return cached;
-    }
-
-    try {
-      if (!imgEl || !(imgEl.naturalWidth || imgEl.videoWidth) || !(imgEl.naturalHeight || imgEl.videoHeight)) {
-        applyDynamicPalette(fallback);
-        return fallback;
-      }
-      const sampler = document.createElement('canvas');
-      if (!sampler || typeof sampler.getContext !== 'function') {
-        applyDynamicPalette(fallback);
-        return fallback;
-      }
-      sampler.width = 24;
-      sampler.height = 24;
-      const ctx = sampler.getContext('2d');
-      if (!ctx || typeof ctx.drawImage !== 'function' || typeof ctx.getImageData !== 'function') {
-        applyDynamicPalette(fallback);
-        return fallback;
-      }
-      ctx.drawImage(imgEl, 0, 0, 24, 24);
-      const data = ctx.getImageData(0, 0, 24, 24).data;
-
-      let bestScore = -1;
-      let bestRgb = null;
-      let warmScore = -1;
-      let warmRgb = null;
-      let altScore = -1;
-      let altRgb = null;
-
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i];
-        const g = data[i + 1];
-        const b = data[i + 2];
-        const a = data[i + 3];
-        if (a < 180) continue;
-        const max = Math.max(r, g, b);
-        const min = Math.min(r, g, b);
-        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-        if (luma < 18 || luma > 238) continue;
-        const sat = max === 0 ? 0 : (max - min) / max;
-        const midBonus = 1 - Math.abs(luma - 125) / 135;
-        const score = sat * (0.45 + Math.max(0, midBonus));
-        if (score > bestScore && sat > 0.18) {
-          bestScore = score;
-          bestRgb = [r, g, b];
-        }
-        const lightScore = (luma / 255) * (0.6 + sat * 0.4);
-        if (luma > 135 && lightScore > warmScore) {
-          warmScore = lightScore;
-          warmRgb = [r, g, b];
-        }
-        if (bestRgb && sat > 0.15) {
-          const dist = Math.abs(r - bestRgb[0]) + Math.abs(g - bestRgb[1]) + Math.abs(b - bestRgb[2]);
-          if (dist > 70 && score > altScore) {
-            altScore = score;
-            altRgb = [r, g, b];
-          }
-        }
-      }
-
-      if (!bestRgb) {
-        if (fileName) wallpaperPaletteCache.set(fileName, fallback);
-        applyDynamicPalette(fallback);
-        return fallback;
-      }
-
-      const [ar, ag, ab] = bestRgb;
-      const bright = [
-        clampByte(ar * 1.25 + 24),
-        clampByte(ag * 1.15 + 16),
-        clampByte(ab * 1.15 + 18)
-      ];
-      const sec = warmRgb
-        ? [clampByte(warmRgb[0] * 0.7 + 74), clampByte(warmRgb[1] * 0.7 + 68), clampByte(warmRgb[2] * 0.7 + 62)]
-        : [248, 224, 192];
-      const spot = [
-        clampByte(bright[0] * 0.65 + 88),
-        clampByte(bright[1] * 0.65 + 64),
-        clampByte(bright[2] * 0.65 + 58)
-      ];
-      const dust = altRgb
-        ? [clampByte(altRgb[0] * 0.9 + 20), clampByte(altRgb[1] * 0.9 + 18), clampByte(altRgb[2] * 0.9 + 24)]
-        : [clampByte(ar * 0.6 + 68), clampByte(ag * 0.6 + 52), clampByte(ab * 0.7 + 84)];
-
-      const derived = {
-        accent: `${ar}, ${ag}, ${ab}`,
-        bright: `${bright[0]}, ${bright[1]}, ${bright[2]}`,
-        secondary: `${sec[0]}, ${sec[1]}, ${sec[2]}`,
-        spotlight: `${spot[0]}, ${spot[1]}, ${spot[2]}`,
-        dust: `${dust[0]}, ${dust[1]}, ${dust[2]}`
-      };
-      if (fileName) wallpaperPaletteCache.set(fileName, derived);
-      applyDynamicPalette(derived);
-      return derived;
-    } catch (_) {
-      applyDynamicPalette(fallback);
-      return fallback;
-    }
+  function extractPaletteFromImage() {
+    applyDynamicPalette();
+    return currentDynamicPalette;
   }
 
   function ensureMilkThemeStyles() {
@@ -2633,6 +2529,7 @@
       if (!targetSlotEl) return;
 
       targetSlotEl.innerHTML = '';
+      applyDynamicPalette();
       if (isVideo) {
         const vid = document.createElement('video');
         vid.src = nextUrl;
@@ -2643,40 +2540,13 @@
         vid.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
         targetSlotEl.appendChild(vid);
         vid.play && vid.play().catch && vid.play().catch(() => {});
-        const sampleVideoPalette = () => {
-          try {
-            if (wallpaperFiles[safeIdx] !== fileName) return;
-            if (wallpaperPaletteCache.has(fileName)) {
-              applyDynamicPalette(wallpaperPaletteCache.get(fileName));
-              return;
-            }
-            if (vid.videoWidth > 0) {
-              extractPaletteFromImage(vid, fileName, safeIdx);
-            }
-          } catch (_) {}
-        };
-        vid.addEventListener('loadeddata', sampleVideoPalette, { once: true });
-        applyDynamicPalette(PALETTE_PRESETS[safeIdx % PALETTE_PRESETS.length]);
       } else {
         const img = document.createElement('img');
         img.alt = '';
         img.draggable = false;
         img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;image-rendering:-webkit-optimize-contrast;';
-        if (wallpaperPaletteCache.has(fileName)) {
-          applyDynamicPalette(wallpaperPaletteCache.get(fileName));
-        } else {
-          applyDynamicPalette(PALETTE_PRESETS[safeIdx % PALETTE_PRESETS.length]);
-          img.onload = () => {
-            if (wallpaperFiles[wallpaperIndex] === fileName) {
-              extractPaletteFromImage(img, fileName, safeIdx);
-            }
-          };
-        }
-        img.src = nextUrl; // set src after onload is wired
+        img.src = nextUrl;
         targetSlotEl.appendChild(img);
-        if (img.complete && img.naturalWidth > 0) {
-          extractPaletteFromImage(img, fileName, safeIdx);
-        }
       }
 
       wallpaperSlotUrls[nextSlot] = nextUrl;
@@ -2735,10 +2605,10 @@
   // =========================================================================
   const FX_PARTICLE_COUNT = 240;
   const FX_PALETTE = [
-    '255, 64, 76',   // #ff404c bright crimson pixel
-    '224, 52, 58',   // #e0343a vivid red
-    '248, 228, 196', // #f8e4c4 warm cream highlight
-    '196, 108, 176'  // #c46cb0 luminous violet dust
+    '255, 68, 82',   // #ff4452 bright crimson pixel
+    '198, 52, 60',   // #c6343c deep crimson
+    '248, 224, 192', // #f8e0c0 warm cream highlight
+    '224, 64, 76'    // #e0404c red glow dust
   ];
   let fxRafId = 0;
   let fxGlitchWaitTimer = 0;
