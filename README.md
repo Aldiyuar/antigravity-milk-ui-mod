@@ -9,7 +9,7 @@
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-c6343c?style=for-the-badge)
 ![Target](https://img.shields.io/badge/Antigravity-v2.32%2B%20%7C%20Electron%2044%2B-18181b?style=for-the-badge&labelColor=c6343c)
 ![Models](https://img.shields.io/badge/Gemini-3.8%20Flash%20%7C%20Hydrogen%20%7C%20Argon%20%7C%20Carbon-8b222a?style=for-the-badge)
-![Wallpapers](https://img.shields.io/badge/Wallpapers-5%20Included-18181b?style=for-the-badge&labelColor=8b222a)
+![Wallpapers](https://img.shields.io/badge/Wallpapers-12%20Included%20(FHD)-18181b?style=for-the-badge&labelColor=8b222a)
 
 [✨ Возможности](#-возможности) • [🖼 Галерея обоев](#-галерея-обоев) • [⚡ Быстрая установка](#-быстрая-установка) • [🤖 Инструкция для ИИ-агента](#-инструкция-для-ии-агента)
 
@@ -32,19 +32,27 @@
 
 ## 🖼 Галерея обоев
 
-В комплекте уже лежат 5 обоев в папке [`wallpapers/`](./wallpapers) — свои можно докинуть туда же в любой момент (кнопка открытия папки встроена прямо в меню обоев справа внизу).
+В комплекте уже лежат **12 обоев** (`11 × 1920×1080 PNG` + `1 × 1920×1080 MP4` с анимацией моргания) в папке [`wallpapers/`](./wallpapers) — свои можно докинуть туда же в любой момент (кнопка открытия папки встроена прямо в меню обоев справа внизу).
 
 <details>
-<summary><b>Показать все 5 встроенных обоев</b></summary>
+<summary><b>Показать встроенные обои (11 PNG + 1 MP4)</b></summary>
 <br />
 
 | `01_milk_room.png` | `02_milk_mirror_brush.png` | `03_milk_mirror_look.png` |
 | :---: | :---: | :---: |
 | <img src="./wallpapers/01_milk_room.png" alt="01_milk_room" width="260" /> | <img src="./wallpapers/02_milk_mirror_brush.png" alt="02_milk_mirror_brush" width="260" /> | <img src="./wallpapers/03_milk_mirror_look.png" alt="03_milk_mirror_look" width="260" /> |
 
-| `04_milk_balcony.png` | `05_milk_floor.png` |
-| :---: | :---: |
-| <img src="./wallpapers/04_milk_balcony.png" alt="04_milk_balcony" width="260" /> | <img src="./wallpapers/05_milk_floor.png" alt="05_milk_floor" width="260" /> |
+| `04_milk_balcony.png` | `05_milk_floor.png` | `06_milk_azs_fireflies.png` |
+| :---: | :---: | :---: |
+| <img src="./wallpapers/04_milk_balcony.png" alt="04_milk_balcony" width="260" /> | <img src="./wallpapers/05_milk_floor.png" alt="05_milk_floor" width="260" /> | <img src="./wallpapers/06_milk_azs_fireflies.png" alt="06_milk_azs_fireflies" width="260" /> |
+
+| `07_milk_chan_room.png` | `08_milk_fullbody_room.png` | `09_milk_sleepingbag.png` |
+| :---: | :---: | :---: |
+| <img src="./wallpapers/07_milk_chan_room.png" alt="07_milk_chan_room" width="260" /> | <img src="./wallpapers/08_milk_fullbody_room.png" alt="08_milk_fullbody_room" width="260" /> | <img src="./wallpapers/09_milk_sleepingbag.png" alt="09_milk_sleepingbag" width="260" /> |
+
+| `10_milk_mosquito.png` | `11_milk_portrait_frame.png` | `12_milk_room_blink.mp4` |
+| :---: | :---: | :---: |
+| <img src="./wallpapers/10_milk_mosquito.png" alt="10_milk_mosquito" width="260" /> | <img src="./wallpapers/11_milk_portrait_frame.png" alt="11_milk_portrait_frame" width="260" /> | 🎬 **1920×1080 Full HD Loop** ([скачать / открыть](./wallpapers/12_milk_room_blink.mp4)) |
 
 </details>
 
