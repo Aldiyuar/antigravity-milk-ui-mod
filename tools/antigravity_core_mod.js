@@ -50,12 +50,24 @@
       if (oldWpMenu) oldWpMenu.remove();
       const oldWpCtrl = document.getElementById('antigravity-wallpaper-ctrl');
       if (oldWpCtrl) oldWpCtrl.remove();
+      const oldSwarmCorner = document.getElementById('antigravity-swarm-corner-btn');
+      if (oldSwarmCorner) oldSwarmCorner.remove();
+      const oldCornerDock = document.getElementById('antigravity-corner-dock');
+      if (oldCornerDock) oldCornerDock.remove();
       const leftoverPopover = document.getElementById('antigravity-token-popover');
       if (leftoverPopover) leftoverPopover.remove();
       const leftoverSwarm = document.getElementById('antigravity-swarm-modal');
       if (leftoverSwarm) leftoverSwarm.remove();
       if (window.__antigravity_wallpaper_timer) {
         clearInterval(window.__antigravity_wallpaper_timer);
+      }
+      if (window.__antigravity_overview_observer) {
+        window.__antigravity_overview_observer.disconnect();
+        window.__antigravity_overview_observer = null;
+      }
+      if (window.__antigravity_overview_debounce) {
+        clearTimeout(window.__antigravity_overview_debounce);
+        window.__antigravity_overview_debounce = 0;
       }
       if (typeof window.__antigravity_stop_fx === 'function') {
         window.__antigravity_stop_fx(true);
@@ -127,9 +139,45 @@
   let agentLastSteps = 0;
   let agentLastOutput = '';
   let isWindowBlurred = false;
+  let swarmPrevFocusEl = null;
+  let wpMenuActiveTab = 'scenes'; // 'scenes' | 'fx'
 
   function isAppInactive() {
     return Boolean(document.hidden || isWindowBlurred);
+  }
+
+  function isReducedMotion() {
+    try {
+      return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function agyIcon(name, size = 13) {
+    const base = `width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0;display:inline-block;vertical-align:middle;"`;
+    switch (name) {
+      case 'pin':
+        return `<svg ${base}><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>`;
+      case 'pause':
+        return `<svg ${base}><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
+      case 'play':
+        return `<svg ${base}><polygon points="6 4 20 12 6 20 6 4"/></svg>`;
+      case 'refresh':
+        return `<svg ${base}><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>`;
+      case 'folder':
+        return `<svg ${base}><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>`;
+      case 'copy':
+        return `<svg ${base}><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+      case 'check':
+        return `<svg ${base}><polyline points="20 6 9 17 4 12"/></svg>`;
+      case 'network':
+        return `<svg ${base}><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="19" cy="18" r="2.5"/><path d="M7.3 11.1 16.7 6.9"/><path d="M7.3 12.9 16.7 17.1"/></svg>`;
+      case 'image':
+        return `<svg ${base}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>`;
+      default:
+        return '';
+    }
   }
 
   function hasDomStopIndicator(box) {
@@ -272,7 +320,7 @@
         if (!scope || typeof scope.querySelectorAll !== 'function') continue;
         const buttons = scope.querySelectorAll('button, [role="button"]');
         for (const btn of buttons) {
-          if (btn.closest && btn.closest('#antigravity-token-stats-bar, #antigravity-wallpaper-menu, #antigravity-wallpaper-ctrl')) {
+          if (btn.closest && btn.closest('#antigravity-token-stats-bar, #antigravity-wallpaper-menu, #antigravity-wallpaper-ctrl, #antigravity-corner-dock')) {
             continue;
           }
           const text = (btn.textContent || '').replace(/\s+/g, ' ').trim();
@@ -309,6 +357,20 @@
     } catch (_) {
       return false;
     }
+  }
+
+  function isMilkWallpaperActive() {
+    const layer = typeof document.getElementById === 'function' ? document.getElementById('antigravity-wallpaper-layer') : null;
+    return Boolean(layer && layer.style && layer.style.display !== 'none' && wallpaperFiles.length > 0);
+  }
+
+  function syncSurfaceThemeClass() {
+    try {
+      const root = document.documentElement;
+      if (!root || !root.classList) return;
+      const light = !isMilkWallpaperActive() && isLightSurface();
+      root.classList.toggle('agy-light-surface', light);
+    } catch (_) {}
   }
 
   async function fetchStats(modelName) {
@@ -356,22 +418,30 @@
       let bar = document.getElementById('antigravity-token-stats-bar');
       const modelName = getActiveModelName(box);
       const stats = await fetchStats(modelName);
-      const light = isLightSurface();
+      const light = !isMilkWallpaperActive() && isLightSurface();
+      syncSurfaceThemeClass();
       const palette = light
         ? {
             muted: '#52525b',
             strong: '#18181b',
             pillBg: 'rgba(0, 0, 0, 0.05)',
-            pillBorder: 'rgba(0, 0, 0, 0.12)',
-            track: 'rgba(0, 0, 0, 0.14)'
+            pillBorder: 'rgba(0, 0, 0, 0.14)',
+            track: 'rgba(0, 0, 0, 0.14)',
+            barBg: 'rgba(248, 248, 250, 0.90)',
+            barBorder: 'rgba(0, 0, 0, 0.09)'
           }
         : {
-            muted: '#9ca3af',
-            strong: '#f3f4f6',
-            pillBg: 'rgba(255, 255, 255, 0.06)',
-            pillBorder: 'rgba(255, 255, 255, 0.1)',
-            track: 'rgba(255, 255, 255, 0.12)'
+            muted: 'rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.82)',
+            strong: '#f8f0e8',
+            pillBg: 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.16)',
+            pillBorder: 'rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.44)',
+            track: 'rgba(255, 255, 255, 0.16)',
+            barBg: 'rgba(9, 10, 16, 0.80)',
+            barBorder: 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.24)'
           };
+
+      const convIdNow = getConversationIdFromLocation();
+      const isIdleHome = !convIdNow && !stats.hasTokens && (stats.turns || 0) === 0 && (stats.steps || 0) === 0;
 
       const statsHash = [
         stats.turns,
@@ -393,6 +463,7 @@
         stats.apiCost,
         stats.contextInspector && stats.contextInspector.summary ? stats.contextInspector.summary.total : 0,
         stats.hasTokens ? 1 : 0,
+        isIdleHome ? 1 : 0,
         light ? 'L' : 'D',
         modelName
       ].join('|');
@@ -406,9 +477,14 @@
             'align-items: center',
             'justify-content: space-between',
             'width: 100%',
-            'padding: 6px 12px 4px 12px',
+            'margin-top: 4px',
+            'padding: 8px 12px',
+            'border-radius: 10px',
+            `background: ${palette.barBg}`,
+            `border: 1px solid ${palette.barBorder}`,
             'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-            'font-size: 11.5px',
+            'font-size: 12px',
+            'font-variant-numeric: tabular-nums',
             `color: ${palette.muted}`,
             'user-select: none',
             'box-sizing: border-box',
@@ -422,8 +498,10 @@
       if (bar.dataset.statsHash !== statsHash) {
         bar.dataset.statsHash = statsHash;
         bar.style.color = palette.muted;
+        bar.style.background = palette.barBg;
+        bar.style.borderColor = palette.barBorder;
 
-        const progressColor = stats.percent > 85 ? '#ef4444' : stats.percent > 65 ? '#f59e0b' : '#22c55e';
+        const progressColor = getContextProgressColor(stats.percent);
         const percentText = stats.hasTokens && stats.percent === 0 ? '<1%' : `${stats.percent}%`;
         const arcDash = stats.hasTokens ? Math.max(1, Math.min(100, stats.exactPercent || stats.percent)) : 0;
 
@@ -477,10 +555,20 @@
           }
         }
 
-        barContent.innerHTML = `
-          <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px;">
+        const popOpenNow = Boolean(
+          document.getElementById('antigravity-token-popover')
+          && document.getElementById('antigravity-token-popover').style
+          && document.getElementById('antigravity-token-popover').style.display !== 'none'
+        );
+
+        const metricsLeftHtml = isIdleHome
+          ? `<div style="display: flex; align-items: center; gap: 6px; color: ${palette.muted};">
+               <span style="width: 6px; height: 6px; border-radius: 9999px; background: rgb(var(--agy-accent-bright-rgb, 255, 68, 82)); opacity: 0.78; display: inline-block;"></span>
+               <span>Монитор: новый чат</span>
+             </div>`
+          : `<div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px;">
             <div style="display: flex; align-items: center; gap: 5px;" title="${leftTitle}">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.88;">
                 <circle cx="12" cy="12" r="10"></circle>
                 <polyline points="12 6 12 12 16 14"></polyline>
               </svg>
@@ -488,7 +576,7 @@
             </div>
 
             <div style="display: flex; align-items: center; gap: 5px;" title="${midTitle}">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.88;">
                 <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
                 <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
                 <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
@@ -497,73 +585,57 @@
             </div>
 
             <div style="display: flex; align-items: center; gap: 5px;" title="${totalTitle}">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.88;">
                 <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
                 <polyline points="2 17 12 22 22 17"></polyline>
                 <polyline points="2 12 12 17 22 12"></polyline>
               </svg>
               <span><strong style="color: ${palette.strong}; font-weight: 600;">${stats.grandTotalTokens}</strong> total${subagentSuffix}</span>
             </div>
-          </div>
+          </div>`;
 
-          <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
-            <div style="display: flex; align-items: center; gap: 3px;" title="${costTitle}">
+        const rightMetricsHtml = isIdleHome
+          ? ''
+          : `<div style="display: flex; align-items: center; gap: 3px;" title="${costTitle}">
               <span><strong style="color: ${palette.strong}; font-weight: 600;">${escapeAttr(stats.apiCost || '$0.00')}</strong></span>
             </div>
 
             <div style="display: flex; align-items: center; gap: 4px;" title="${workTimeTitle}">
-              <svg width="12.5" height="12.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.88;">
                 <path d="M5 22h14"></path>
                 <path d="M5 2h14"></path>
                 <path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"></path>
                 <path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"></path>
               </svg>
               <span><strong style="color: ${palette.strong}; font-weight: 600;">${escapeAttr(stats.totalWorkTime)}</strong></span>
-            </div>
+            </div>`;
 
-            <button id="antigravity-swarm-btn" type="button" style="
-              display: flex;
-              align-items: center;
-              gap: 4px;
-              padding: 2px 7px;
-              border-radius: 9999px;
-              background: ${stats.subagentCount > 0 ? palette.pillBg : 'transparent'};
-              border: 1px solid ${stats.subagentCount > 0 ? palette.pillBorder : 'rgba(128,128,128,0.22)'};
-              color: ${stats.subagentCount > 0 ? palette.strong : palette.muted};
-              font-size: 11px;
-              font-weight: 600;
-              user-select: none;
-              cursor: pointer;
-              transition: background 0.15s ease, border-color 0.15s ease;
-            " title="Открыть карту роя субагентов (${stats.subagentCount || 0})">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.85;">
-                <circle cx="5" cy="12" r="2.5"></circle>
-                <circle cx="19" cy="6" r="2.5"></circle>
-                <circle cx="19" cy="18" r="2.5"></circle>
-                <path d="M7.3 11.1 16.7 6.9"></path>
-                <path d="M7.3 12.9 16.7 17.1"></path>
-              </svg>
-              <span>${stats.subagentCount > 0 ? stats.subagentCount : 'Рой'}</span>
-            </button>
+        barContent.innerHTML = `
+          ${metricsLeftHtml}
 
-            <div id="antigravity-token-pill" style="
-              display: flex;
+          <div style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">
+            ${rightMetricsHtml}
+
+            <button id="antigravity-token-pill" type="button" aria-haspopup="dialog" aria-expanded="${popOpenNow ? 'true' : 'false'}" style="
+              display: inline-flex;
               align-items: center;
               gap: 6px;
-              padding: 2px 8px;
+              padding: 3px 9px;
               border-radius: 9999px;
               background: ${palette.pillBg};
               border: 1px solid ${palette.pillBorder};
+              color: ${palette.strong};
+              font: inherit;
               user-select: none;
               cursor: pointer;
               transition: background 0.15s ease, border-color 0.15s ease;
             " title="${pillTitle} (ЛКМ: подробная статистика)">
-              <svg width="13" height="13" viewBox="0 0 36 36">
+              <svg width="13" height="13" viewBox="0 0 36 36" aria-hidden="true">
                 <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="${palette.track}" stroke-width="4" />
                 ${progressArc}
               </svg>
               <span style="color: ${palette.strong}; font-weight: 600;">${escapeAttr(percentText)}</span>
-            </div>
+            </button>
           </div>
         `;
 
@@ -572,14 +644,6 @@
           pillEl.onclick = (e) => {
             if (e && e.stopPropagation) e.stopPropagation();
             toggleTokenPopover(bar, lastStatsData, getActiveModelName(box));
-          };
-        }
-
-        const swarmBtn = bar.querySelector && bar.querySelector('#antigravity-swarm-btn');
-        if (swarmBtn) {
-          swarmBtn.onclick = (e) => {
-            if (e && e.stopPropagation) e.stopPropagation();
-            toggleSwarmModal(lastStatsData, getActiveModelName(box));
           };
         }
       }
@@ -598,6 +662,7 @@
       }
 
       syncAgentStateOnUi(box, stats);
+      updateSwarmCornerButton(stats, modelName);
       if (milkBackdropNodes.length > 0) {
         for (const mb of milkBackdropNodes) {
           if (mb && mb.isConnected) constrainTablesInDialogBox(mb);
@@ -638,7 +703,7 @@
     const w = 248;
     const h = 38;
     if (arr.length === 0) {
-      return `<div style="height:${h}px;display:flex;align-items:center;justify-content:center;color:rgba(243,244,246,0.42);font-size:10.5px;border:1px dashed rgba(255,255,255,0.10);border-radius:6px;">Ожидание замеров скорости...</div>`;
+      return `<div style="height:${h}px;display:flex;align-items:center;justify-content:center;color:var(--agy-text-muted, rgba(248, 224, 192, 0.78));font-size:11px;border:1px dashed var(--agy-border-hairline, rgba(255,255,255,0.12));border-radius:6px;">Ожидание замеров скорости...</div>`;
     }
     const maxV = Math.max(...arr, 10);
     const minV = Math.min(...arr);
@@ -676,11 +741,57 @@
     `;
   }
 
-  function closeTokenPopover() {
+  function closeTokenPopover(restoreFocus) {
     const pop = document.getElementById('antigravity-token-popover');
     if (pop && pop.style) {
       pop.style.display = 'none';
     }
+    const pill = document.getElementById('antigravity-token-pill');
+    if (pill) {
+      pill.setAttribute('aria-expanded', 'false');
+      if (restoreFocus && typeof pill.focus === 'function') {
+        try { pill.focus(); } catch (_) {}
+      }
+    }
+  }
+
+  function wrapSvgTextLines(text, maxChars = 35, maxLines = 2) {
+    const clean = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!clean) return [''];
+    const words = clean.split(' ');
+    const lines = [];
+    let cur = '';
+    for (let i = 0; i < words.length; i++) {
+      let w = words[i];
+      if (!cur) {
+        if (w.length > maxChars && maxLines > 1 && lines.length < maxLines - 1) {
+          lines.push(w.slice(0, maxChars));
+          w = w.slice(maxChars);
+        }
+        cur = w;
+      } else if ((cur.length + 1 + w.length) <= maxChars) {
+        cur = `${cur} ${w}`;
+      } else {
+        lines.push(cur);
+        if (lines.length >= maxLines) {
+          const prev = lines[maxLines - 1];
+          lines[maxLines - 1] = prev.length >= maxChars ? `${prev.slice(0, maxChars - 1)}…` : `${prev}…`;
+          return lines;
+        }
+        cur = w;
+      }
+    }
+    if (cur) {
+      if (lines.length >= maxLines) {
+        const last = lines[maxLines - 1];
+        lines[maxLines - 1] = last.length >= maxChars ? `${last.slice(0, maxChars - 1)}…` : `${last}…`;
+      } else if (cur.length > maxChars) {
+        lines.push(`${cur.slice(0, maxChars - 1)}…`);
+      } else {
+        lines.push(cur);
+      }
+    }
+    return lines.slice(0, maxLines);
   }
 
   function cleanRoleLabel(raw) {
@@ -735,10 +846,10 @@
       childrenMap.get(pId).push(n);
     }
 
-    const nodeW = 166;
-    const nodeH = 40;
-    const colGap = 44;
-    const rowGap = 10;
+    const nodeW = 264;
+    const nodeH = 74;
+    const colGap = 52;
+    const rowGap = 14;
     const padX = 24;
     const padY = 20;
     const unitH = nodeH + rowGap;
@@ -782,8 +893,8 @@
 
     layoutTree(rootEntry, padY);
 
-    const svgW = Math.max(480, padX * 2 + (maxDepth + 1) * nodeW + maxDepth * colGap);
-    const svgH = Math.max(240, Math.round(totalTreeH + padY * 2));
+    const svgW = Math.max(520, padX * 2 + (maxDepth + 1) * nodeW + maxDepth * colGap);
+    const svgH = Math.max(240, Math.round(totalTreeH + padY * 2 + 16));
 
     const activeSelId = (selId && posMap.has(selId))
       ? selId
@@ -826,19 +937,38 @@
         ? 'rgb(var(--agy-accent-bright-rgb, 255, 68, 82))'
         : (isRoot ? 'rgb(var(--agy-secondary-rgb, 248, 224, 192))' : 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.88)');
 
-      const rawLabel = isRoot ? 'Main Chat' : (n.role || 'Subagent');
-      const shortLabel = rawLabel.length > 22 ? `${rawLabel.slice(0, 21)}…` : rawLabel;
-      const metaLine = isRoot
-        ? `${n.tokens || '0'} tok · ${n.cost || '$0'} · ${n.workTime || '0s'}`
-        : `S${n.depth} · ${n.tokens || '0'} · ${n.cost || '$0'} · ${n.workTime || '0s'}`;
+      const rawLabel = isRoot ? 'Main Chat' : cleanSwarmDisplayText(n.role || 'Subagent') || 'Subagent';
+      const shortLabel = rawLabel.length > 28 ? `${rawLabel.slice(0, 27)}…` : rawLabel;
+      const tagText = isLive ? 'LIVE' : (isRoot ? 'ROOT' : `S${n.depth}`);
+      const cleanTask = cleanSwarmDisplayText(n.task || '');
+      const cleanType = cleanSwarmDisplayText(n.agentType || '');
+      const cleanTarget = cleanSwarmDisplayText(n.lastTarget || '');
+      const rawTask = (cleanTask || cleanTarget || n.lastTool || (isRoot ? 'Основной чат' : 'Субагент')).replace(/\s+/g, ' ').trim();
+      const taskLines = wrapSvgTextLines(rawTask, 36, 2);
+      const taskLine1 = taskLines[0] || '';
+      const taskLine2 = taskLines[1] || '';
+      const actionHint = n.lastTool ? ` · ${n.lastTool}` : '';
+      const rawMeta = `${n.tokens || '0'} tok · ${n.cost || '$0'} · ${n.workTime || '0s'}${actionHint}`;
+      const metaLine = rawMeta.length > 38 ? `${rawMeta.slice(0, 37)}…` : rawMeta;
+      const fullTooltip = [
+        rawLabel + (cleanType ? ` [${cleanType}]` : ''),
+        cleanTask ? `Задача: ${cleanTask}` : '',
+        n.modelLabel ? `Модель: ${cleanSwarmDisplayText(n.modelLabel)}` : '',
+        n.lastTool ? `Действие: ${n.lastTool}${cleanTarget ? ` (${cleanTarget})` : ''}` : ''
+      ].filter(Boolean).join('\n');
+      const nodeAriaLabel = `${rawLabel} (${tagText}). ${rawTask}. ${metaLine}`;
 
       nodesSvg += `
-        <g class="agy-swarm-node-g" data-swarm-node="${escapeAttr(n.id)}" style="cursor:pointer;">
-          <rect x="${item.x}" y="${item.y}" width="${nodeW}" height="${nodeH}" rx="7" fill="${bgCol}" stroke="${borderCol}" stroke-width="${isSelected ? 2 : 1.2}" />
+        <g class="agy-swarm-node-g" data-swarm-node="${escapeAttr(n.id)}" tabindex="0" role="button" aria-pressed="${isSelected ? 'true' : 'false'}" aria-label="${escapeAttr(nodeAriaLabel)}" style="cursor:pointer;">
+          <title>${escapeAttr(fullTooltip)}</title>
+          <rect x="${item.x}" y="${item.y}" width="${nodeW}" height="${nodeH}" rx="8" fill="${bgCol}" stroke="${borderCol}" stroke-width="${isSelected ? 2 : 1.2}" />
           <rect x="${item.x}" y="${item.y}" width="4" height="${nodeH}" rx="2" fill="${barCol}" />
-          ${isLive ? `<circle cx="${item.x + nodeW - 9}" cy="${item.y + 9}" r="3.2" fill="rgb(var(--agy-accent-bright-rgb, 255, 68, 82))" class="agy-swarm-node-pulse" />` : ''}
-          <text x="${item.x + 10}" y="${item.y + 16}" fill="#f8f0e8" font-size="11" font-weight="${isSelected || isRoot ? '700' : '600'}" style="pointer-events:none;">${escapeAttr(shortLabel)}</text>
-          <text x="${item.x + 10}" y="${item.y + 30}" fill="rgba(243,244,246,0.70)" font-size="9.5" style="pointer-events:none;">${escapeAttr(metaLine)}</text>
+          <text x="${item.x + 12}" y="${item.y + 18}" fill="#f8f0e8" font-size="12" font-weight="${isSelected || isRoot ? '700' : '600'}" style="pointer-events:none;">${escapeAttr(shortLabel)}</text>
+          <text x="${item.x + nodeW - (isLive ? 19 : 11)}" y="${item.y + 17}" text-anchor="end" fill="${isLive ? 'rgb(var(--agy-accent-bright-rgb, 255, 68, 82))' : 'rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.78)'}" font-size="11" font-weight="700" style="pointer-events:none;">${escapeAttr(tagText)}</text>
+          ${isLive ? `<circle cx="${item.x + nodeW - 10}" cy="${item.y + 13}" r="3.2" fill="rgb(var(--agy-accent-bright-rgb, 255, 68, 82))" class="agy-swarm-node-pulse" />` : ''}
+          <text x="${item.x + 12}" y="${item.y + 34}" fill="rgba(248,224,192,0.90)" font-size="11" style="pointer-events:none;">${escapeAttr(taskLine1)}</text>
+          ${taskLine2 ? `<text x="${item.x + 12}" y="${item.y + 47}" fill="rgba(248,224,192,0.84)" font-size="11" style="pointer-events:none;">${escapeAttr(taskLine2)}</text>` : ''}
+          <text x="${item.x + 12}" y="${item.y + 64}" fill="rgba(243,244,246,0.80)" font-size="11" style="pointer-events:none;">${escapeAttr(metaLine)}</text>
         </g>
       `;
     }
@@ -862,13 +992,46 @@
     if (modal && modal.style) {
       modal.style.display = 'none';
     }
+    const prev = swarmPrevFocusEl;
+    swarmPrevFocusEl = null;
+    if (prev && prev.isConnected && typeof prev.focus === 'function') {
+      try { prev.focus(); } catch (_) {}
+    }
+  }
+
+  function cleanSwarmDisplayText(raw) {
+    if (!raw) return '';
+    return String(raw)
+      .replace(/\\r\\n|\\n|\\r/g, ' ')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .replace(/^["'\s]+|["'\s]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   function applySwarmCanvasTransform(modal) {
     if (!modal) return;
     const stageEl = modal.querySelector && modal.querySelector('#agy-swarm-stage');
     if (stageEl && stageEl.style) {
-      stageEl.style.transform = `translate(${swarmPanX.toFixed(1)}px, ${swarmPanY.toFixed(1)}px) scale(${swarmZoom.toFixed(3)})`;
+      stageEl.style.left = `${Math.round(swarmPanX)}px`;
+      stageEl.style.top = `${Math.round(swarmPanY)}px`;
+      stageEl.style.transform = 'none';
+    }
+    const svgEl = modal.querySelector && modal.querySelector('#agy-swarm-svg');
+    if (svgEl) {
+      const baseW = Number(svgEl.getAttribute && svgEl.getAttribute('data-base-w')) || 480;
+      const baseH = Number(svgEl.getAttribute && svgEl.getAttribute('data-base-h')) || 240;
+      const drawW = Math.max(1, Math.round(baseW * swarmZoom));
+      const drawH = Math.max(1, Math.round(baseH * swarmZoom));
+      if (typeof svgEl.setAttribute === 'function') {
+        svgEl.setAttribute('width', String(drawW));
+        svgEl.setAttribute('height', String(drawH));
+      }
+      if (svgEl.style) {
+        svgEl.style.width = `${drawW}px`;
+        svgEl.style.height = `${drawH}px`;
+      }
     }
     const zoomLbl = modal.querySelector && modal.querySelector('#agy-swarm-zoom-lbl');
     if (zoomLbl) {
@@ -906,7 +1069,7 @@
       s.grandTotalTokens,
       s.apiCost,
       s.subagentCount,
-      subagents.map((x) => `${x.id}:${x.steps}:${x.isActive ? 1 : 0}:${x.lastTool || ''}`).join(',')
+      subagents.map((x) => `${x.id}:${x.steps}:${x.isActive ? 1 : 0}:${x.lastTool || ''}:${x.lastTarget || ''}:${(x.task || '').length}`).join(',')
     ].join('|');
 
     if (modal.dataset && modal.dataset.renderKey === renderKey) {
@@ -923,74 +1086,92 @@
       ? '<span class="agy-wp-menu-pill is-on">ACTIVE</span>'
       : '<span class="agy-wp-menu-pill is-off">DONE</span>';
     const shortSelId = sel.id && sel.id.length > 14 ? `${sel.id.slice(0, 10)}…` : (sel.id || '');
+    const cleanSelRole = cleanSwarmDisplayText(sel.role || 'Node') || 'Node';
+    const cleanSelType = cleanSwarmDisplayText(sel.agentType || '');
+    const cleanSelModel = cleanSwarmDisplayText(sel.modelLabel || '');
+    const cleanSelTask = cleanSwarmDisplayText(sel.task || '');
+    const cleanSelTarget = cleanSwarmDisplayText(sel.lastTarget || '');
+    const typeAndModel = [cleanSelType, cleanSelModel].filter(Boolean).join(' · ');
+    const actionCombined = sel.lastTool
+      ? (cleanSelTarget ? `${sel.lastTool} (${cleanSelTarget})` : sel.lastTool)
+      : '—';
+    const filesMeta = sel.filesCount > 0 ? ` · Файлов: <strong style="color:var(--agy-text-primary, #ffffff);">${sel.filesCount}</strong>` : '';
+    const taskBlockHtml = cleanSelTask
+      ? `<div style="margin:6px 0 7px;padding:6px 9px;border-radius:6px;background:rgba(0,0,0,0.28);font-size:11.5px;line-height:1.42;color:var(--agy-text-primary, rgba(248,240,232,0.94));max-height:58px;overflow-y:auto;">
+           <span style="color:var(--agy-text-muted, rgba(248,224,192,0.82));font-weight:600;margin-right:5px;">Задача:</span>${escapeAttr(cleanSelTask)}
+         </div>`
+      : '';
 
     const bodyHtml = layout.empty
-      ? `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(243,244,246,0.58);font-size:13px;gap:6px;">
-           <div style="font-size:26px;opacity:0.75;">🕸</div>
-           <div>В этом чате субагенты ещё не запускались</div>
-           <div style="font-size:11.5px;opacity:0.65;">Как только агент вызовет субагентов, здесь появится интерактивное дерево роя</div>
+      ? `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--agy-text-muted, rgba(248,224,192,0.82));font-size:13px;gap:8px;">
+           <div style="opacity:0.86;color:rgb(var(--agy-accent-bright-rgb, 255, 68, 82));">${agyIcon('network', 28)}</div>
+           <div style="color:var(--agy-text-primary, #f8f0e8);font-weight:600;">В этом чате субагенты ещё не запускались</div>
+           <div style="font-size:11.5px;">Как только агент вызовет субагентов, здесь появится интерактивное дерево роя</div>
          </div>`
       : `
-        <div id="agy-swarm-viewport" style="position:relative;flex:1;overflow:hidden;border-radius:10px;background:rgba(5,6,11,0.72);border:1px solid rgba(255,255,255,0.08);cursor:grab;">
-          <div id="agy-swarm-stage" style="position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform;">
-            <svg width="${layout.svgW}" height="${layout.svgH}" viewBox="0 0 ${layout.svgW} ${layout.svgH}" style="display:block;">
+        <div id="agy-swarm-viewport" style="position:relative;flex:1;overflow:hidden;border-radius:10px;background:rgba(5,6,11,0.78);border:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));cursor:grab;touch-action:none;">
+          <div id="agy-swarm-stage" style="position:absolute;top:0;left:0;">
+            <svg id="agy-swarm-svg" data-base-w="${layout.svgW}" data-base-h="${layout.svgH}" width="${Math.max(1, Math.round(layout.svgW * swarmZoom))}" height="${Math.max(1, Math.round(layout.svgH * swarmZoom))}" viewBox="0 0 ${layout.svgW} ${layout.svgH}" shape-rendering="geometricPrecision" text-rendering="geometricPrecision" style="display:block;">
               ${layout.svgInner}
             </svg>
           </div>
-          <div style="position:absolute;bottom:8px;right:10px;font-size:10px;color:rgba(243,244,246,0.45);pointer-events:none;">
-            Перетаскивайте фон · Колёсико: масштаб · Клик по узлу: детали
+          <div style="position:absolute;bottom:8px;right:10px;padding:3px 9px;border-radius:6px;background:rgba(5,6,11,0.86);border:1px solid var(--agy-border-hairline, rgba(255,255,255,0.10));font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.82));pointer-events:none;">
+            Перетаскивайте фон · Колёсико: масштаб · Клик / Enter: детали · Стрелки: узлы
           </div>
         </div>
 
-        <div class="agy-pop-stat-card" style="margin-top:10px;padding:9px 12px;background:rgba(var(--agy-accent-rgb, 198, 52, 60), 0.11);border-color:rgba(var(--agy-accent-rgb, 198, 52, 60), 0.34);">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px;">
+        <div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(var(--agy-accent-rgb, 198, 52, 60), 0.12);border:1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.36);">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
             <div style="display:flex;align-items:center;gap:8px;min-width:0;">
-              <span style="font-weight:700;color:#f8f0e8;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(sel.role || 'Node')}</span>
-              <span style="font-size:11px;color:rgba(243,244,246,0.60);">${sel.depth ? `Уровень S${sel.depth}` : 'Корень чата'}</span>
+              <span style="font-weight:700;color:var(--agy-text-primary, #f8f0e8);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(cleanSelRole)}</span>
+              <span style="font-size:11.5px;color:var(--agy-text-muted, rgba(248,224,192,0.82));">${sel.depth ? `S${sel.depth}` : 'Корень'}</span>
+              ${typeAndModel ? `<span style="font-size:11px;padding:1px 6px;border-radius:5px;background:var(--agy-surface-subtle, rgba(255,255,255,0.06));color:var(--agy-text-secondary, rgba(248,224,192,0.88));white-space:nowrap;">${escapeAttr(typeAndModel)}</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
               ${statusBadge}
-              ${sel.id ? `<button type="button" id="agy-swarm-copy-id" data-copy-id="${escapeAttr(sel.id)}" class="agy-wp-menu-chip" style="padding:2px 8px;font-size:11px;" title="Скопировать ID: ${escapeAttr(sel.id)}">${escapeAttr(shortSelId)} 📋</button>` : ''}
+              ${sel.id ? `<button type="button" id="agy-swarm-copy-id" data-copy-id="${escapeAttr(sel.id)}" class="agy-wp-menu-chip" style="padding:3px 8px;font-size:11px;" title="Скопировать ID: ${escapeAttr(sel.id)}"><span>${escapeAttr(shortSelId)}</span>${agyIcon('copy', 12)}</button>` : ''}
             </div>
           </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:11.5px;color:rgba(243,244,246,0.86);">
-            <span>Токены: <strong style="color:#ffffff;">${escapeAttr(sel.tokens || '0')}</strong> · API: <strong style="color:#ffffff;">${escapeAttr(sel.cost || '$0.00')}</strong> · Шаги: <strong style="color:#ffffff;">${sel.steps || 0}</strong> · Время: <strong style="color:#ffffff;">${escapeAttr(sel.workTime || '0s')}</strong></span>
-            <span style="color:rgba(243,244,246,0.68);">Последнее действие: <strong style="color:#f8f0e8;">${escapeAttr(sel.lastTool || '—')}</strong></span>
+          ${taskBlockHtml}
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:11.5px;color:var(--agy-text-secondary, rgba(243,244,246,0.90));margin-top:${cleanSelTask ? '0' : '5px'};">
+            <span>Токены: <strong style="color:var(--agy-text-primary, #ffffff);">${escapeAttr(sel.tokens || '0')}</strong> · API: <strong style="color:var(--agy-text-primary, #ffffff);">${escapeAttr(sel.cost || '$0.00')}</strong> · Шаги: <strong style="color:var(--agy-text-primary, #ffffff);">${sel.steps || 0}</strong> · Время: <strong style="color:var(--agy-text-primary, #ffffff);">${escapeAttr(sel.workTime || '0s')}</strong>${filesMeta}</span>
+            <span style="color:var(--agy-text-muted, rgba(248,224,192,0.84));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46%;">Действие: <strong style="color:var(--agy-text-primary, #f8f0e8);">${escapeAttr(actionCombined)}</strong></span>
           </div>
         </div>
       `;
 
     modal.innerHTML = `
       <div id="antigravity-swarm-card" style="
-        width: min(1040px, 90vw);
+        width: min(1040px, 92vw);
         height: min(720px, 84vh);
         display: flex;
         flex-direction: column;
         padding: 14px 16px;
         border-radius: 14px;
-        background: rgba(11, 12, 19, 0.96);
-        backdrop-filter: blur(18px);
-        -webkit-backdrop-filter: blur(18px);
-        border: 1px solid rgba(var(--agy-accent-rgb, 173, 50, 51), 0.52);
+        background: var(--agy-surface-panel, rgba(11, 12, 19, 0.96));
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.52);
         box-shadow: 0 24px 60px rgba(0, 0, 0, 0.82);
-        color: #f3f4f6;
+        color: var(--agy-text-primary, #f8f0e8);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-variant-numeric: tabular-nums;
         box-sizing: border-box;
       ">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-shrink:0;">
           <div style="display:flex;flex-direction:column;min-width:0;">
-            <span style="font-weight:700;color:#f8f0e8;font-size:14px;">Карта роя субагентов</span>
-            <span style="font-size:11px;color:rgba(243,244,246,0.66);">
+            <span id="agy-swarm-title" style="font-weight:700;color:var(--agy-text-primary, #f8f0e8);font-size:14px;">Карта роя субагентов</span>
+            <span style="font-size:11.5px;color:var(--agy-text-muted, rgba(248,224,192,0.82));">
               Узлов: ${subagents.length + 1} (1 + ${subagents.length}) · Глубина: ${layout.maxDepth} · Активно: ${layout.activeCount} · Всего: ${escapeAttr(s.grandTotalTokens || '0')} tok (${escapeAttr(s.apiCost || '$0.00')})
             </span>
           </div>
           <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
             ${layout.empty ? '' : `
-              <button type="button" id="agy-swarm-zoom-out" class="agy-wp-menu-chip" title="Уменьшить">−</button>
+              <button type="button" id="agy-swarm-zoom-out" class="agy-wp-menu-chip" title="Уменьшить" aria-label="Уменьшить масштаб">−</button>
               <button type="button" id="agy-swarm-zoom-fit" class="agy-wp-menu-chip" title="Вписать весь граф в окно"><span id="agy-swarm-zoom-lbl">${Math.round(swarmZoom * 100)}%</span> · Вписать</button>
-              <button type="button" id="agy-swarm-zoom-in" class="agy-wp-menu-chip" title="Увеличить">+</button>
+              <button type="button" id="agy-swarm-zoom-in" class="agy-wp-menu-chip" title="Увеличить" aria-label="Увеличить масштаб">+</button>
             `}
-            <button type="button" id="agy-swarm-close" class="agy-wp-menu-chip" style="padding:3px 9px;" title="Закрыть (Esc)">✕</button>
+            <button type="button" id="agy-swarm-close" class="agy-wp-menu-chip" style="padding:4px 9px;" title="Закрыть (Esc)" aria-label="Закрыть карту роя">✕</button>
           </div>
         </div>
         ${bodyHtml}
@@ -1025,40 +1206,46 @@
       const vp = modal.querySelector && modal.querySelector('#agy-swarm-viewport');
       if (vp) {
         let isDragging = false;
-        let moved = false;
+        let activePointerId = null;
         let startX = 0;
         let startY = 0;
         let origPanX = 0;
         let origPanY = 0;
 
-        vp.onmousedown = (e) => {
-          if (e.button !== 0) return;
+        vp.onpointerdown = (e) => {
+          if (typeof e.button === 'number' && e.button !== 0) return;
           if (e.target && e.target.closest && e.target.closest('[data-swarm-node]')) return;
           isDragging = true;
           swarmIsDragging = true;
-          moved = false;
+          activePointerId = e.pointerId != null ? e.pointerId : null;
           startX = e.clientX;
           startY = e.clientY;
           origPanX = swarmPanX;
           origPanY = swarmPanY;
           vp.style.cursor = 'grabbing';
+          if (activePointerId != null && typeof vp.setPointerCapture === 'function') {
+            try { vp.setPointerCapture(activePointerId); } catch (_) {}
+          }
         };
-        vp.onmousemove = (e) => {
+        vp.onpointermove = (e) => {
           if (!isDragging) return;
-          const dx = e.clientX - startX;
-          const dy = e.clientY - startY;
-          if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
-          swarmPanX = origPanX + dx;
-          swarmPanY = origPanY + dy;
+          if (activePointerId != null && e.pointerId != null && e.pointerId !== activePointerId) return;
+          swarmPanX = origPanX + (e.clientX - startX);
+          swarmPanY = origPanY + (e.clientY - startY);
           applySwarmCanvasTransform(modal);
         };
-        const endDrag = () => {
+        const endDrag = (e) => {
+          if (!isDragging) return;
+          if (activePointerId != null && e && typeof vp.releasePointerCapture === 'function') {
+            try { vp.releasePointerCapture(activePointerId); } catch (_) {}
+          }
           isDragging = false;
           swarmIsDragging = false;
+          activePointerId = null;
           vp.style.cursor = 'grab';
         };
-        vp.onmouseup = endDrag;
-        vp.onmouseleave = endDrag;
+        vp.onpointerup = endDrag;
+        vp.onpointercancel = endDrag;
 
         vp.onwheel = (e) => {
           if (e && e.preventDefault) e.preventDefault();
@@ -1075,20 +1262,32 @@
         };
       }
 
+      const zoomAroundCenter = (nextZoomRaw) => {
+        const vpEl = modal.querySelector && modal.querySelector('#agy-swarm-viewport');
+        const vpW = (vpEl && vpEl.clientWidth) ? vpEl.clientWidth : 820;
+        const vpH = (vpEl && vpEl.clientHeight) ? vpEl.clientHeight : 440;
+        const cx = vpW / 2;
+        const cy = vpH / 2;
+        const nextZoom = Math.max(0.28, Math.min(2.4, Number(nextZoomRaw.toFixed(3))));
+        const ratio = nextZoom / Math.max(0.01, swarmZoom);
+        swarmPanX = cx - (cx - swarmPanX) * ratio;
+        swarmPanY = cy - (cy - swarmPanY) * ratio;
+        swarmZoom = nextZoom;
+        applySwarmCanvasTransform(modal);
+      };
+
       const zOut = modal.querySelector && modal.querySelector('#agy-swarm-zoom-out');
       if (zOut) {
         zOut.onclick = (e) => {
           e.stopPropagation();
-          swarmZoom = Math.max(0.28, Number((swarmZoom * 0.85).toFixed(3)));
-          applySwarmCanvasTransform(modal);
+          zoomAroundCenter(swarmZoom * 0.85);
         };
       }
       const zIn = modal.querySelector && modal.querySelector('#agy-swarm-zoom-in');
       if (zIn) {
         zIn.onclick = (e) => {
           e.stopPropagation();
-          swarmZoom = Math.min(2.4, Number((swarmZoom * 1.18).toFixed(3)));
-          applySwarmCanvasTransform(modal);
+          zoomAroundCenter(swarmZoom * 1.18);
         };
       }
       const zFit = modal.querySelector && modal.querySelector('#agy-swarm-zoom-fit');
@@ -1099,18 +1298,44 @@
         };
       }
 
-      const swarmNodes = modal.querySelectorAll ? modal.querySelectorAll('[data-swarm-node]') : [];
-      for (const sn of swarmNodes) {
+      const swarmNodes = modal.querySelectorAll ? Array.from(modal.querySelectorAll('[data-swarm-node]')) : [];
+      const selectSwarmNode = (nid, focusSelected) => {
+        if (!nid) return;
+        selectedSwarmNodeId = nid;
+        if (modal.dataset) modal.dataset.renderKey = '';
+        renderSwarmModal(modal, lastStatsData, modelName);
+        if (focusSelected && modal.querySelector) {
+          const sameNode = modal.querySelector(`[data-swarm-node="${CSS && CSS.escape ? CSS.escape(nid) : nid.replace(/"/g, '\\"')}"]`) || modal.querySelector('[data-swarm-node]');
+          if (sameNode && typeof sameNode.focus === 'function') {
+            try { sameNode.focus(); } catch (_) {}
+          }
+        }
+      };
+
+      swarmNodes.forEach((sn, idx) => {
         sn.onclick = (e) => {
           if (e && e.stopPropagation) e.stopPropagation();
           const nid = sn.dataset ? sn.dataset.swarmNode : '';
-          if (nid && nid !== selectedSwarmNodeId) {
-            selectedSwarmNodeId = nid;
-            if (modal.dataset) modal.dataset.renderKey = '';
-            renderSwarmModal(modal, lastStatsData, modelName);
+          if (nid && nid !== selectedSwarmNodeId) selectSwarmNode(nid, false);
+        };
+        sn.onkeydown = (e) => {
+          if (!e) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            if (e.preventDefault) e.preventDefault();
+            if (e.stopPropagation) e.stopPropagation();
+            const nid = sn.dataset ? sn.dataset.swarmNode : '';
+            if (nid) selectSwarmNode(nid, true);
+          } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+            if (e.preventDefault) e.preventDefault();
+            const nextNode = swarmNodes[(idx + 1) % swarmNodes.length];
+            if (nextNode && typeof nextNode.focus === 'function') nextNode.focus();
+          } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+            if (e.preventDefault) e.preventDefault();
+            const prevNode = swarmNodes[(idx - 1 + swarmNodes.length) % swarmNodes.length];
+            if (prevNode && typeof prevNode.focus === 'function') prevNode.focus();
           }
         };
-      }
+      });
 
       const swarmCopyBtn = modal.querySelector && modal.querySelector('#agy-swarm-copy-id');
       if (swarmCopyBtn) {
@@ -1118,10 +1343,10 @@
           if (e && e.stopPropagation) e.stopPropagation();
           const cid = swarmCopyBtn.dataset ? swarmCopyBtn.dataset.copyId : '';
           if (cid && copyTextToClipboard(cid)) {
-            const orig = swarmCopyBtn.textContent;
-            swarmCopyBtn.textContent = 'Скопировано ✓';
+            const origHtml = swarmCopyBtn.innerHTML;
+            swarmCopyBtn.innerHTML = `${agyIcon('check', 12)}<span>Скопировано</span>`;
             setTimeout(() => {
-              if (swarmCopyBtn.isConnected) swarmCopyBtn.textContent = orig;
+              if (swarmCopyBtn.isConnected) swarmCopyBtn.innerHTML = origHtml;
             }, 1100);
           }
         };
@@ -1132,16 +1357,20 @@
   function toggleSwarmModal(stats, modelName) {
     ensureMilkThemeStyles();
     installWallpaperMenuDismissListeners();
-    closeTokenPopover();
+    closeTokenPopover(false);
     closeWallpaperMenu();
     let modal = document.getElementById('antigravity-swarm-modal');
     if (modal && modal.style && modal.style.display !== 'none') {
       closeSwarmModal();
       return;
     }
+    swarmPrevFocusEl = document.activeElement || null;
     if (!modal) {
       modal = document.createElement('div');
       modal.id = 'antigravity-swarm-modal';
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-modal', 'true');
+      modal.setAttribute('aria-labelledby', 'agy-swarm-title');
       modal.style.cssText = [
         'position: fixed',
         'inset: 0',
@@ -1149,11 +1378,23 @@
         'display: flex',
         'align-items: center',
         'justify-content: center',
-        'background: rgba(5, 6, 12, 0.72)',
-        'backdrop-filter: blur(6px)',
-        '-webkit-backdrop-filter: blur(6px)'
+        'background: rgba(5, 6, 12, 0.78)'
       ].join(';');
       modal.onclick = () => closeSwarmModal();
+      modal.onkeydown = (e) => {
+        if (!e || e.key !== 'Tab') return;
+        const focusables = Array.from(modal.querySelectorAll('button:not([disabled]), [data-swarm-node][tabindex="0"], [tabindex]:not([tabindex="-1"])'));
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          if (e.preventDefault) e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          if (e.preventDefault) e.preventDefault();
+          first.focus();
+        }
+      };
       (document.body || document.documentElement).appendChild(modal);
     }
     swarmInitializedView = false;
@@ -1161,6 +1402,16 @@
     if (modal.dataset) modal.dataset.renderKey = '';
     modal.style.display = 'flex';
     renderSwarmModal(modal, stats, modelName);
+    const focusTarget = (modal.querySelector && (modal.querySelector('#agy-swarm-close') || modal.querySelector('[data-swarm-node]'))) || null;
+    if (focusTarget && typeof focusTarget.focus === 'function') {
+      try { focusTarget.focus(); } catch (_) {}
+    }
+  }
+
+  function getContextProgressColor(percent) {
+    if (percent > 85) return '#ff2a3c';
+    if (percent > 65) return '#f59e0b';
+    return 'rgb(var(--agy-accent-bright-rgb, 255, 68, 82))';
   }
 
   function renderTokenPopover(popover, stats, modelName) {
@@ -1168,7 +1419,7 @@
     const s = stats || DEFAULT_ZERO_STATS;
     const convId = getConversationIdFromLocation() || '';
     const shortConv = convId ? (convId.length > 12 ? `${convId.slice(0, 8)}…` : convId) : 'Нет чата';
-    const progressColor = s.percent > 85 ? '#ef4444' : s.percent > 65 ? '#f59e0b' : '#22c55e';
+    const progressColor = getContextProgressColor(s.percent);
     const barWidth = s.hasTokens ? Math.max(2, Math.min(100, s.exactPercent || s.percent)) : 0;
 
     const speeds = Array.isArray(s.speedHistory) ? s.speedHistory : (s.speed > 0 ? [s.speed] : []);
@@ -1212,7 +1463,8 @@
       return;
     }
     if (popover.dataset) popover.dataset.renderKey = renderKey;
-    popover.style.width = '304px';
+    popover.setAttribute('role', 'dialog');
+    popover.setAttribute('aria-label', 'Монитор сессии');
 
     const subRowsHtml = subagents.map((sub, idx) => {
       const roleText = escapeAttr(sub.role || `Subagent #${idx + 1}`);
@@ -1221,19 +1473,19 @@
       const subMeta = `${escapeAttr(sub.tokens || '0')} tok${costPart} · ${escapeAttr(sub.workTime || '0s')}`;
       return `
         <button type="button" class="agy-pop-sub-row" data-sub-id="${subIdAttr}" title="ЛКМ: скопировать ID субагента (${subIdAttr})">
-          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:118px;font-weight:600;color:#f8f0e8;">${roleText}</span>
-          <span style="color:rgba(243,244,246,0.75);font-size:10.5px;flex-shrink:0;">${subMeta}</span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:124px;font-weight:600;color:var(--agy-text-primary, #f8f0e8);">${roleText}</span>
+          <span style="color:var(--agy-text-muted, rgba(248,224,192,0.82));font-size:11px;flex-shrink:0;">${subMeta}</span>
         </button>
       `;
     }).join('');
 
     const subSectionHtml = subagents.length > 0 ? `
-      <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;font-size:10.5px;color:rgba(243,244,246,0.68);">
+      <div style="margin-top:9px;padding-top:8px;border-top:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.82));">
           <span>Субагенты (${s.subagentCount || subagents.length})</span>
           <span>${escapeAttr(s.subagentTotalTokens)} tok · ${escapeAttr(s.apiCostSubagents || '$0.00')}</span>
         </div>
-        <div style="display:flex;flex-direction:column;gap:3px;max-height:96px;overflow-y:auto;padding-right:2px;">
+        <div style="display:flex;flex-direction:column;gap:4px;max-height:102px;overflow-y:auto;padding-right:2px;">
           ${subRowsHtml}
         </div>
       </div>
@@ -1243,56 +1495,56 @@
 
     const overviewHtml = `
       <div style="margin-bottom:9px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;margin-bottom:4px;">
-          <span style="color:rgba(243,244,246,0.78);">Заполнение окна</span>
-          <strong style="color:#ffffff;font-weight:600;">${escapeAttr(s.contextTokens)} / ${escapeAttr(s.modelLimitLabel)} (${s.exactPercent}%)</strong>
+        <div style="display:flex;align-items:center;justify-content:space-between;font-size:11.5px;margin-bottom:4px;">
+          <span style="color:var(--agy-text-secondary, rgba(243,244,246,0.88));">Заполнение окна</span>
+          <strong style="color:var(--agy-text-primary, #ffffff);font-weight:600;">${escapeAttr(s.contextTokens)} / ${escapeAttr(s.modelLimitLabel)} (${s.exactPercent}%)</strong>
         </div>
-        <div style="width:100%;height:6px;border-radius:9999px;background:rgba(255,255,255,0.10);overflow:hidden;">
+        <div style="width:100%;height:6px;border-radius:9999px;background:var(--agy-border-subtle, rgba(255,255,255,0.12));overflow:hidden;">
           <div style="width:${barWidth}%;height:100%;border-radius:9999px;background:${progressColor};transition:width 0.25s ease;"></div>
         </div>
       </div>
 
-      <div class="agy-pop-stat-card" style="margin-bottom:7px;background:rgba(var(--agy-accent-rgb, 198, 52, 60), 0.12);border-color:rgba(var(--agy-accent-rgb, 198, 52, 60), 0.34);">
+      <div style="margin-bottom:8px;padding:7px 9px;border-radius:8px;background:rgba(var(--agy-accent-rgb, 198, 52, 60), 0.14);">
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <span class="agy-pop-stat-lbl">Стоимость по API</span>
-          <span style="font-size:12.5px;font-weight:700;color:#ffffff;">${escapeAttr(s.apiCost || '$0.00')}</span>
+          <span style="font-size:13px;font-weight:700;color:var(--agy-text-primary, #ffffff);">${escapeAttr(s.apiCost || '$0.00')}</span>
         </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;font-size:10px;color:rgba(243,244,246,0.70);margin-top:2px;">
+        <div style="font-size:11px;color:var(--agy-text-secondary, rgba(243,244,246,0.86));margin-top:2px;">
           <span>${costDetails}</span>
         </div>
-        <div style="font-size:9.5px;color:rgba(243,244,246,0.52);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(s.pricingLabel || 'Gemini API')}</div>
+        <div style="font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.78));margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(s.pricingLabel || 'Gemini API')}</div>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:9px;">
-        <div class="agy-pop-stat-card">
+      <div class="agy-pop-metric-grid">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">Вход шага (In / Кэш)</span>
           <span class="agy-pop-stat-val">${escapeAttr(s.lastInput)} / ${escapeAttr(s.lastCache)}</span>
         </div>
-        <div class="agy-pop-stat-card">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">Кэш (шаг / сессия)</span>
           <span class="agy-pop-stat-val">${s.cacheHit}% / ${s.sessionCacheHit}%</span>
         </div>
-        <div class="agy-pop-stat-card">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">Сгенерировано (Out)</span>
           <span class="agy-pop-stat-val">${escapeAttr(s.totalOutput)} tok</span>
         </div>
-        <div class="agy-pop-stat-card">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">Всего прогнано</span>
           <span class="agy-pop-stat-val">${escapeAttr(s.grandTotalTokens)} tok</span>
         </div>
-        <div class="agy-pop-stat-card">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">Ходы / Ответов ИИ</span>
-          <span class="agy-pop-stat-val">${s.turns} / ${s.plannerSteps} <span style="opacity:0.65;font-weight:400;">(${s.steps})</span></span>
+          <span class="agy-pop-stat-val">${s.turns} / ${s.plannerSteps} <span style="opacity:0.78;font-weight:400;">(${s.steps})</span></span>
         </div>
-        <div class="agy-pop-stat-card">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">Активное время</span>
           <span class="agy-pop-stat-val">${escapeAttr(s.totalWorkTime)}</span>
         </div>
       </div>
 
       <div>
-        <div style="display:flex;align-items:center;justify-content:space-between;font-size:10.5px;color:rgba(243,244,246,0.72);margin-bottom:4px;">
-          <span>Скорость: <strong style="color:#f8f0e8;">${s.speed} tok/s</strong></span>
+        <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.82));margin-bottom:4px;">
+          <span>Скорость: <strong style="color:var(--agy-text-primary, #f8f0e8);">${s.speed} tok/s</strong></span>
           <span>мин ${minSpeed} · пик ${peakSpeed} tok/s</span>
         </div>
         ${buildSpeedSparklineSvg(speeds)}
@@ -1307,51 +1559,51 @@
     const filesRowsHtml = inspFiles.length > 0
       ? inspFiles.map((f) => {
           const isHot = (f.reads || 0) >= 3 && (f.edits || 0) === 0;
-          const badgeR = f.reads > 0 ? `<span style="opacity:0.8;">R×${f.reads}</span>` : '';
+          const badgeR = f.reads > 0 ? `<span style="opacity:0.88;">R×${f.reads}</span>` : '';
           const badgeE = f.edits > 0 ? `<span style="color:rgb(var(--agy-secondary-rgb, 248, 224, 192));font-weight:700;">E×${f.edits}</span>` : '';
           const badges = [badgeR, badgeE].filter(Boolean).join(' ');
           return `
             <button type="button" class="agy-pop-sub-row${isHot ? ' is-warn' : ''}" data-file-path="${escapeAttr(f.path)}" title="${escapeAttr(f.path)} (ЛКМ: скопировать путь)">
-              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:170px;font-weight:${f.edits > 0 ? '600' : '500'};color:${f.edits > 0 ? '#f8f0e8' : 'rgba(243,244,246,0.88)'};">${escapeAttr(f.name)}</span>
-              <span style="display:flex;gap:5px;font-size:10px;flex-shrink:0;">${badges}</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:170px;font-weight:${f.edits > 0 ? '600' : '500'};color:${f.edits > 0 ? 'var(--agy-text-primary, #f8f0e8)' : 'var(--agy-text-secondary, rgba(243,244,246,0.88))'};">${escapeAttr(f.name)}</span>
+              <span style="display:flex;gap:5px;font-size:11px;flex-shrink:0;">${badges}</span>
             </button>
           `;
         }).join('')
-      : `<div style="padding:10px;text-align:center;color:rgba(243,244,246,0.48);font-size:10.5px;border:1px dashed rgba(255,255,255,0.10);border-radius:7px;">Файлы в этом чате ещё не читались</div>`;
+      : `<div style="padding:10px;text-align:center;color:var(--agy-text-muted, rgba(248,224,192,0.78));font-size:11px;border:1px dashed var(--agy-border-hairline, rgba(255,255,255,0.12));border-radius:7px;">Файлы в этом чате ещё не читались</div>`;
 
     const contextHtml = `
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:8px;">
-        <div class="agy-pop-stat-card">
+      <div class="agy-pop-metric-grid cols-3">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">Чтение</span>
           <span class="agy-pop-stat-val">${inspSummary.reads}</span>
         </div>
-        <div class="agy-pop-stat-card">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">Правки</span>
           <span class="agy-pop-stat-val">${inspSummary.edits}</span>
         </div>
-        <div class="agy-pop-stat-card">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">Команды</span>
           <span class="agy-pop-stat-val">${inspSummary.cmds}</span>
         </div>
-        <div class="agy-pop-stat-card">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">Веб</span>
           <span class="agy-pop-stat-val">${inspSummary.web}</span>
         </div>
-        <div class="agy-pop-stat-card">
+        <div class="agy-pop-metric-cell">
           <span class="agy-pop-stat-lbl">MCP / Суб</span>
           <span class="agy-pop-stat-val">${inspSummary.mcp} / ${inspSummary.subagents}</span>
         </div>
-        <div class="agy-pop-stat-card" title="Примерный объём ответов инструментов (символы / 4)">
+        <div class="agy-pop-metric-cell" title="Примерный объём ответов инструментов (символы / 4)">
           <span class="agy-pop-stat-lbl">Вывод тулзов</span>
           <span class="agy-pop-stat-val">~${escapeAttr(inspSummary.approxTokens || '0')}</span>
         </div>
       </div>
       ${topToolsHtml}
-      <div style="display:flex;align-items:center;justify-content:space-between;font-size:10.5px;color:rgba(243,244,246,0.68);margin-bottom:5px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.82));margin-bottom:5px;">
         <span>Файлы в контексте (${inspFiles.length})</span>
         <span>клик — копировать путь</span>
       </div>
-      <div style="display:flex;flex-direction:column;gap:3px;max-height:175px;overflow-y:auto;padding-right:2px;">
+      <div style="display:flex;flex-direction:column;gap:4px;max-height:175px;overflow-y:auto;padding-right:2px;">
         ${filesRowsHtml}
       </div>
     `;
@@ -1360,17 +1612,17 @@
       ? Array.from(popover.querySelectorAll('div')).filter((d) => d.style && d.style.overflowY === 'auto').map((d) => d.scrollTop)
       : [];
     popover.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
         <div style="display:flex;flex-direction:column;min-width:0;">
-          <span style="font-weight:700;color:#f8f0e8;font-size:12px;">Монитор сессии</span>
-          <span style="font-size:10.5px;color:rgba(243,244,246,0.62);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(modelName || 'Авто-модель')} · ${escapeAttr(s.modelLimitLabel)}</span>
+          <span style="font-weight:700;color:var(--agy-text-primary, #f8f0e8);font-size:12.5px;">Монитор сессии</span>
+          <span style="font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.78));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(modelName || 'Авто-модель')} · ${escapeAttr(s.modelLimitLabel)}</span>
         </div>
-        ${convId ? `<button type="button" id="agy-pop-copy-conv" class="agy-wp-menu-chip" title="Скопировать ID чата: ${escapeAttr(convId)}">${escapeAttr(shortConv)} 📋</button>` : ''}
+        ${convId ? `<button type="button" id="agy-pop-copy-conv" class="agy-wp-menu-chip" title="Скопировать ID чата: ${escapeAttr(convId)}"><span>${escapeAttr(shortConv)}</span>${agyIcon('copy', 12)}</button>` : ''}
       </div>
 
-      <div style="display:flex;gap:4px;margin-bottom:9px;padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,0.08);">
-        <button type="button" class="agy-wp-menu-chip${popoverActiveTab === 'overview' ? ' is-active' : ''}" data-pop-tab="overview" style="flex:1;padding:3px 6px;">Обзор · ${escapeAttr(s.apiCost || '$0.00')}</button>
-        <button type="button" class="agy-wp-menu-chip${popoverActiveTab === 'context' ? ' is-active' : ''}" data-pop-tab="context" style="flex:1;padding:3px 6px;">Инспектор (${inspSummary.total})</button>
+      <div role="tablist" aria-label="Разделы монитора" style="display:flex;gap:5px;margin-bottom:9px;padding-bottom:7px;border-bottom:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));">
+        <button type="button" role="tab" aria-selected="${popoverActiveTab === 'overview' ? 'true' : 'false'}" class="agy-wp-menu-chip${popoverActiveTab === 'overview' ? ' is-active' : ''}" data-pop-tab="overview" style="flex:1;padding:4px 6px;">Обзор · ${escapeAttr(s.apiCost || '$0.00')}</button>
+        <button type="button" role="tab" aria-selected="${popoverActiveTab === 'context' ? 'true' : 'false'}" class="agy-wp-menu-chip${popoverActiveTab === 'context' ? ' is-active' : ''}" data-pop-tab="context" style="flex:1;padding:4px 6px;">Инспектор (${inspSummary.total})</button>
       </div>
 
       ${popoverActiveTab === 'context' ? contextHtml : overviewHtml}
@@ -1399,9 +1651,10 @@
       copyBtn.onclick = (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
         if (copyTextToClipboard(convId)) {
-          copyBtn.textContent = 'Скопировано ✓';
+          const origHtml = copyBtn.innerHTML;
+          copyBtn.innerHTML = `${agyIcon('check', 12)}<span>Скопировано</span>`;
           setTimeout(() => {
-            if (copyBtn.isConnected) copyBtn.textContent = `${shortConv} 📋`;
+            if (copyBtn.isConnected) copyBtn.innerHTML = origHtml;
           }, 1200);
         }
       };
@@ -1415,7 +1668,7 @@
         if (val && copyTextToClipboard(val)) {
           const firstSpan = btn.querySelector && btn.querySelector('span');
           const orig = firstSpan ? firstSpan.textContent : '';
-          if (firstSpan) firstSpan.textContent = 'Скопировано ✓';
+          if (firstSpan) firstSpan.textContent = 'Скопировано';
           setTimeout(() => {
             if (firstSpan && firstSpan.isConnected) firstSpan.textContent = orig;
           }, 1100);
@@ -1430,12 +1683,14 @@
     installWallpaperMenuDismissListeners();
     let popover = document.getElementById('antigravity-token-popover');
     if (popover && popover.style && popover.style.display !== 'none') {
-      closeTokenPopover();
+      closeTokenPopover(false);
       return;
     }
     if (!popover) {
       popover = document.createElement('div');
       popover.id = 'antigravity-token-popover';
+      popover.setAttribute('role', 'dialog');
+      popover.setAttribute('aria-label', 'Монитор сессии');
       popover.onclick = (e) => { if (e && e.stopPropagation) e.stopPropagation(); };
     }
     if (popover.parentElement !== bar) {
@@ -1444,6 +1699,8 @@
     if (popover.dataset) popover.dataset.renderKey = '';
     renderTokenPopover(popover, stats, modelName);
     popover.style.display = 'block';
+    const pill = document.getElementById('antigravity-token-pill');
+    if (pill) pill.setAttribute('aria-expanded', 'true');
   }
 
   // =========================================================================
@@ -1458,6 +1715,10 @@
   let wallpaperBusy = false;
   let wallpaperSlotUrls = [null, null];
   let wallpaperBlobCache = new Map();
+  let wallpaperThumbCache = new Map();
+  let wallpaperThumbInflight = new Map();
+  let wpLockHintMsg = '';
+  let wpLockHintTimer = 0;
   let isCheckingWallpaper = false;
   let wallpaperTransitionRestoreTimer = 0;
   let backdropScanSignature = '';
@@ -1468,6 +1729,9 @@
   let milkBackdropNodes = [];
   let milkSidebarEl = null;
   let milkHeaderEl = null;
+  let milkHeaderEls = [];
+  let milkGreetingEl = null;
+  let milkOverviewCardEl = null;
   let milkActiveSidebarItem = null;
   let wallpaperPaletteCache = new Map();
 
@@ -1480,6 +1744,7 @@
     spotlight: true,
     vhsSwitch: true,
     scrimOpacity: 100,
+    greetingMode: 'center',
     homeWpFile: '',
     chatWpFile: ''
   };
@@ -1505,6 +1770,13 @@
         window.localStorage.setItem(FX_PREFS_STORAGE_KEY, JSON.stringify(fxPrefs));
       }
     } catch (_) {}
+    try {
+      const bridge = window.antigravityTokenBridge;
+      if (bridge && typeof bridge.setFxPrefs === 'function') {
+        const ret = bridge.setFxPrefs({ ...fxPrefs });
+        if (ret && typeof ret.catch === 'function') ret.catch(() => {});
+      }
+    } catch (_) {}
   }
 
   function applyScrimStyle(inChat) {
@@ -1513,17 +1785,45 @@
     const rawPct = typeof fxPrefs.scrimOpacity === 'number' && !Number.isNaN(fxPrefs.scrimOpacity)
       ? fxPrefs.scrimOpacity
       : 100;
-    const mult = Math.max(0, Math.min(1.5, rawPct / 100));
+    const mult = Math.max(0, Math.min(1, rawPct / 100));
     const a = (base) => (base * mult).toFixed(3);
     scrim.style.background = inChat
-      ? `radial-gradient(circle at center, rgba(10,10,14,${a(0.22)}) 0%, rgba(10,10,14,${a(0.54)}) 100%)`
-      : `radial-gradient(circle at center, rgba(10,10,14,${a(0.12)}) 0%, rgba(10,10,14,${a(0.48)}) 100%), linear-gradient(to top, rgba(10,10,14,${a(0.82)}) 0%, rgba(10,10,14,${a(0.10)}) 38%, rgba(10,10,14,${a(0.18)}) 100%)`;
+      ? `radial-gradient(circle at center, rgba(10,10,14,${a(0.24)}) 0%, rgba(10,10,14,${a(0.58)}) 100%)`
+      : `radial-gradient(circle at center, rgba(10,10,14,${a(0.14)}) 0%, rgba(10,10,14,${a(0.52)}) 100%), linear-gradient(to top, rgba(10,10,14,${a(0.86)}) 0%, rgba(10,10,14,${a(0.12)}) 38%, rgba(10,10,14,${a(0.20)}) 100%)`;
     scrim.style.backdropFilter = 'none';
   }
 
   let fxPrefs = loadFxPrefs();
+  let fxPrefsHydrated = false;
+  let fxPrefsHydratePromise = null;
+
+  function hydrateFxPrefsFromDisk() {
+    if (fxPrefsHydrated) return Promise.resolve(fxPrefs);
+    if (fxPrefsHydratePromise) return fxPrefsHydratePromise;
+    fxPrefsHydratePromise = (async () => {
+      try {
+        const bridge = window.antigravityTokenBridge;
+        if (bridge && typeof bridge.getFxPrefs === 'function') {
+          const diskPrefs = await bridge.getFxPrefs();
+          if (diskPrefs && typeof diskPrefs === 'object') {
+            fxPrefs = { ...DEFAULT_FX_PREFS, ...fxPrefs, ...diskPrefs };
+            try {
+              if (window.localStorage && typeof window.localStorage.setItem === 'function') {
+                window.localStorage.setItem(FX_PREFS_STORAGE_KEY, JSON.stringify(fxPrefs));
+              }
+            } catch (_) {}
+          } else if (typeof bridge.setFxPrefs === 'function' && (fxPrefs.homeWpFile || fxPrefs.chatWpFile)) {
+            const ret = bridge.setFxPrefs({ ...fxPrefs });
+            if (ret && typeof ret.catch === 'function') ret.catch(() => {});
+          }
+        }
+      } catch (_) {}
+      fxPrefsHydrated = true;
+      return fxPrefs;
+    })();
+    return fxPrefsHydratePromise;
+  }
   let wpMenuCloseTimer = 0;
-  let wpMenuOpenTimer = 0;
   let wpMenuPinned = false;
 
   // Fixed crimson/red Milk palette used uniformly across all wallpapers
@@ -1548,6 +1848,7 @@
         rootStyle.setProperty('--agy-spotlight-rgb', currentDynamicPalette.spotlight);
       }
     } catch (_) {}
+    syncSurfaceThemeClass();
 
     if (typeof FX_PALETTE !== 'undefined' && Array.isArray(FX_PALETTE)) {
       FX_PALETTE[0] = currentDynamicPalette.bright;
@@ -1567,9 +1868,91 @@
     return currentDynamicPalette;
   }
 
+  const MOD_OWNED_IDS = new Set([
+    'antigravity-milk-style',
+    'antigravity-wallpaper-layer',
+    'antigravity-wallpaper-menu',
+    'antigravity-wallpaper-ctrl',
+    'antigravity-wp-camera',
+    'antigravity-wp-slot-0',
+    'antigravity-wp-slot-1',
+    'antigravity-wp-scrim',
+    'antigravity-wp-spotlight',
+    'antigravity-wp-fx-canvas',
+    'antigravity-wp-crt',
+    'antigravity-corner-dock',
+    'antigravity-swarm-corner-btn',
+    'antigravity-swarm-modal',
+    'antigravity-token-stats-bar',
+    'antigravity-token-popover'
+  ]);
+
+  function isModOwnedNode(el) {
+    return Boolean(el && el.id && MOD_OWNED_IDS.has(el.id));
+  }
+
+  const OVERVIEW_PANEL_CSS = `
+      html body .agy-milk-overview-card,
+      .agy-milk-overview-card {
+        background-color: rgba(11, 10, 17, 0.92) !important;
+        background-image: linear-gradient(165deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.16) 0%, rgba(12, 11, 18, 0.90) 45%, rgba(8, 8, 14, 0.96) 100%) !important;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.44) !important;
+        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68), inset 0 1px 0 rgba(255, 224, 200, 0.08) !important;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.36) transparent;
+        transition: border-color 0.35s ease, box-shadow 0.35s ease, background-color 0.3s ease;
+      }
+      .agy-milk-overview-card * {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.36) transparent;
+      }
+      .agy-milk-overview-card > div:not([role="button"]),
+      .agy-milk-overview-card > div > div:not([role="button"]),
+      .agy-milk-overview-inner-bg {
+        background-color: transparent !important;
+        box-shadow: none !important;
+      }
+      .agy-milk-overview-sep,
+      .agy-milk-overview-card hr,
+      .agy-milk-overview-card [class*="border-t"],
+      .agy-milk-overview-card [class*="border-b"] {
+        border-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.28) !important;
+      }
+      .agy-milk-overview-line {
+        background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.28) !important;
+      }
+      .agy-milk-overview-card button,
+      .agy-milk-overview-card [role="button"],
+      .agy-milk-overview-card [role="menuitem"],
+      .agy-milk-overview-card [class*="cursor-pointer"],
+      .agy-milk-overview-card a {
+        transition: background-color 0.15s ease, color 0.15s ease, border-color 0.2s ease;
+      }
+      .agy-milk-overview-card button:hover,
+      .agy-milk-overview-card [role="button"]:hover,
+      .agy-milk-overview-card [role="menuitem"]:hover,
+      .agy-milk-overview-card [class*="cursor-pointer"]:hover,
+      .agy-milk-overview-card a:hover {
+        background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.18) !important;
+      }
+      .agy-milk-overview-card :is(button, a, [role="button"], [tabindex]):focus-visible {
+        outline: 2px solid rgb(var(--agy-secondary-rgb, 248, 224, 192)) !important;
+        outline-offset: 2px !important;
+      }
+      .agy-milk-overview-badge {
+        background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.32) !important;
+        border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.50) !important;
+        color: rgb(var(--agy-secondary-rgb, 248, 224, 192)) !important;
+      }
+  `;
+
   function ensureMilkThemeStyles() {
     if (!document.documentElement || !document.documentElement.style || !document.documentElement.style.getPropertyValue || !document.documentElement.style.getPropertyValue('--agy-accent-rgb')) {
       applyDynamicPalette(currentDynamicPalette);
+    } else {
+      syncSurfaceThemeClass();
     }
     let style = document.getElementById('antigravity-milk-style');
     if (!style) {
@@ -1578,19 +1961,43 @@
       (document.head || document.documentElement || document.body).appendChild(style);
     }
     const nextCss = `
+      :root {
+        --agy-surface-panel: rgba(11, 12, 19, 0.96);
+        --agy-surface-card: rgba(18, 20, 30, 0.92);
+        --agy-surface-subtle: rgba(255, 255, 255, 0.05);
+        --agy-border-subtle: rgba(255, 255, 255, 0.14);
+        --agy-border-hairline: rgba(255, 255, 255, 0.09);
+        --agy-text-primary: #f8f0e8;
+        --agy-text-secondary: rgba(243, 244, 246, 0.88);
+        --agy-text-muted: rgba(248, 224, 192, 0.78);
+      }
+      :root.agy-light-surface {
+        --agy-surface-panel: rgba(252, 250, 248, 0.98);
+        --agy-surface-card: rgba(244, 240, 237, 0.96);
+        --agy-surface-subtle: rgba(0, 0, 0, 0.05);
+        --agy-border-subtle: rgba(0, 0, 0, 0.14);
+        --agy-border-hairline: rgba(0, 0, 0, 0.09);
+        --agy-text-primary: #18181b;
+        --agy-text-secondary: #27272a;
+        --agy-text-muted: #52525b;
+      }
       @keyframes agy-milk-input-pulse {
         0%, 100% {
           border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.52);
-          box-shadow: 0 0 12px rgba(var(--agy-accent-rgb, 198, 52, 60), 0.24);
+          box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
         }
         50% {
           border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.92);
-          box-shadow: 0 0 24px rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.42);
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.62);
         }
       }
       ::selection {
         background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.38) !important;
         color: #fbf2ea !important;
+      }
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.36) transparent;
       }
       ::-webkit-scrollbar {
         width: 6px;
@@ -1600,24 +2007,22 @@
         background: transparent;
       }
       ::-webkit-scrollbar-thumb {
-        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.30);
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.36);
         border-radius: 9999px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.62);
+        background: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.65);
       }
       .agy-milk-dialog-box {
-        background-color: rgba(10, 11, 18, 0.89) !important;
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        border: 1px solid rgba(var(--agy-accent-rgb, 173, 50, 51), 0.42) !important;
+        background-color: rgba(10, 11, 18, 0.91) !important;
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.42) !important;
         border-radius: 12px !important;
         padding: 14px 20px !important;
         box-sizing: border-box !important;
         min-width: 0 !important;
         overflow-x: clip !important;
-        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55) !important;
-        transition: border-color 0.45s ease, box-shadow 0.45s ease;
+        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.54) !important;
+        transition: border-color 0.35s ease, box-shadow 0.35s ease;
       }
       .agy-milk-table-wrap {
         width: 100% !important;
@@ -1665,55 +2070,79 @@
         word-break: break-word !important;
       }
       .agy-milk-dialog-box pre {
-        background-color: rgba(7, 8, 14, 0.74) !important;
-        border: 1px solid rgba(var(--agy-accent-rgb, 173, 50, 51), 0.26) !important;
+        background-color: rgba(7, 8, 14, 0.78) !important;
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.28) !important;
         border-radius: 8px !important;
       }
       .agy-milk-dialog-box :not(pre) > code {
-        background-color: rgba(var(--agy-accent-rgb, 173, 50, 51), 0.16) !important;
+        background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.16) !important;
         border-radius: 4px !important;
       }
       .agy-milk-input-box {
         background-color: rgba(10, 11, 18, 0.92) !important;
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        border-color: rgba(var(--agy-accent-rgb, 173, 50, 51), 0.48) !important;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.48) !important;
         transition: border-color 0.35s ease, box-shadow 0.35s ease;
       }
       .agy-milk-input-box.agy-milk-thinking {
         animation: agy-milk-input-pulse 1.8s ease-in-out infinite !important;
       }
       .agy-milk-input-box.agy-milk-done {
-        border-color: rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.85) !important;
-        box-shadow: 0 0 22px rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.28) !important;
+        border-color: rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.88) !important;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.56) !important;
       }
       [role="menu"],
       [role="listbox"],
+      [role="tooltip"],
       [data-radix-popper-content-wrapper] > [role="dialog"],
-      .monaco-menu-container {
-        background-color: rgba(11, 12, 19, 0.94) !important;
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(var(--agy-accent-rgb, 173, 50, 51), 0.36) !important;
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65) !important;
+      [data-radix-popper-content-wrapper] > div,
+      .monaco-menu-container,
+      .monaco-hover,
+      .quick-input-widget,
+      .monaco-dialog-box {
+        background-color: var(--agy-surface-panel, rgba(11, 12, 19, 0.96)) !important;
+        color: var(--agy-text-primary, #f8f0e8) !important;
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.42) !important;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.68) !important;
       }
       .agy-milk-sidebar {
-        border-right: 1px solid rgba(var(--agy-accent-rgb, 173, 50, 51), 0.24) !important;
-        background-image: linear-gradient(180deg, rgba(var(--agy-accent-rgb, 173, 50, 51), 0.06) 0%, transparent 45%) !important;
-        transition: border-color 0.45s ease;
+        background-color: rgba(10, 10, 15, 0.88) !important;
+        background-image: linear-gradient(180deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.14) 0%, rgba(14, 11, 18, 0.78) 28%, rgba(8, 8, 13, 0.94) 100%) !important;
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border-right: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.34) !important;
+        box-shadow: inset -1px 0 0 rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.12), 6px 0 24px rgba(0, 0, 0, 0.44);
+        transition: border-color 0.45s ease, background-color 0.35s ease;
+      }
+      .agy-milk-sidebar > div,
+      .agy-milk-sidebar > nav {
+        background-color: transparent !important;
+      }
+      .agy-milk-sidebar button[aria-label*="New Conversation"],
+      .agy-milk-sidebar a[href="/"] {
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.42) !important;
+        background: linear-gradient(90deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.18), rgba(18, 12, 20, 0.74)) !important;
+        box-shadow: inset 0 1px 0 rgba(255, 224, 200, 0.08);
+      }
+      .agy-milk-sidebar button[aria-label*="New Conversation"]:hover,
+      .agy-milk-sidebar a[href="/"]:hover {
+        border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.78) !important;
+        background: linear-gradient(90deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.30), rgba(24, 14, 22, 0.84)) !important;
       }
       .agy-milk-sidebar a,
       .agy-milk-sidebar button {
-        transition: background-color 0.18s ease, border-color 0.25s ease;
+        transition: background-color 0.18s ease, border-color 0.25s ease, box-shadow 0.2s ease;
       }
       .agy-milk-sidebar a:hover,
       .agy-milk-sidebar button:hover {
-        background-color: rgba(var(--agy-accent-rgb, 173, 50, 51), 0.11) !important;
+        background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.13) !important;
       }
       .agy-milk-sidebar-active {
-        border-left: 2px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.90) !important;
-        background-color: rgba(var(--agy-accent-rgb, 173, 50, 51), 0.16) !important;
-        box-shadow: inset 8px 0 16px -10px rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.55) !important;
+        border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.42) !important;
+        border-radius: 6px !important;
+        background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.22) !important;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.34) !important;
       }
       .agy-milk-sidebar div:has(> button + button):not(:has(a)),
       .agy-milk-sidebar div:has(> [role="button"] + [role="button"]):not(:has(a)),
@@ -1727,55 +2156,145 @@
         background-image: none !important;
       }
       .agy-milk-header {
-        border-bottom: 1px solid rgba(var(--agy-accent-rgb, 173, 50, 51), 0.22) !important;
-        background-image: linear-gradient(90deg, rgba(var(--agy-accent-rgb, 173, 50, 51), 0.06) 0%, transparent 65%) !important;
-        transition: border-color 0.45s ease;
+        background-color: rgba(11, 10, 16, 0.88) !important;
+        background-image: linear-gradient(90deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.16) 0%, rgba(14, 11, 18, 0.82) 38%, rgba(9, 9, 14, 0.92) 100%) !important;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-bottom: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.30) !important;
+        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.36);
+        transition: border-color 0.45s ease, background-color 0.35s ease;
       }
-      #antigravity-wallpaper-ctrl {
-        border-color: rgba(var(--agy-accent-rgb, 173, 50, 51), 0.45) !important;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+      @keyframes agy-milk-greeting-reveal {
+        0% {
+          opacity: 0;
+          clip-path: inset(0 100% 0 0);
+        }
+        12% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 1;
+          clip-path: inset(0 0 0 0);
+        }
+      }
+      .agy-milk-greeting {
+        position: relative;
+        width: max-content !important;
+        max-width: min(88vw, 760px) !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        padding: 9px 20px !important;
+        border-radius: 4px !important;
+        background: rgba(9, 9, 15, 0.88) !important;
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.52) !important;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.58) !important;
+        color: rgb(var(--agy-secondary-rgb, 248, 224, 192)) !important;
+        font-size: clamp(20px, 2.0vw, 27px) !important;
+        line-height: 1.3 !important;
+        font-weight: 500 !important;
+        text-align: center !important;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.90) !important;
+        letter-spacing: 0.015em;
+        transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease, border-color 0.3s ease;
+      }
+      .agy-milk-greeting > * {
+        font-size: inherit !important;
+        line-height: inherit !important;
+      }
+      .agy-milk-greeting-anim {
+        animation: agy-milk-greeting-reveal 0.85s cubic-bezier(0.22, 1, 0.36, 1) 1 both;
+      }
+      .agy-milk-greeting.agy-milk-greeting-top {
+        transform: translateY(clamp(-155px, -17vh, -72px)) !important;
+      }
+      .agy-milk-greeting.agy-milk-greeting-center {
+        transform: translateY(0) !important;
+      }
+      .agy-milk-greeting.agy-milk-greeting-bottom {
+        transform: translateY(clamp(48px, 11vh, 105px)) !important;
+      }
+      .agy-milk-greeting.agy-milk-greeting-hidden {
+        display: none !important;
+      }
+      ${OVERVIEW_PANEL_CSS}
+      #antigravity-corner-dock {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-variant-numeric: tabular-nums;
+      }
+      #antigravity-token-stats-bar,
+      #antigravity-swarm-modal {
+        font-variant-numeric: tabular-nums;
+      }
+      #antigravity-wallpaper-ctrl,
+      #antigravity-swarm-corner-btn {
+        border-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.50) !important;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.52);
       }
       #antigravity-wallpaper-ctrl:hover,
-      #antigravity-token-pill:hover,
-      #antigravity-swarm-btn:hover {
-        border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.78) !important;
+      #antigravity-swarm-corner-btn:hover,
+      #antigravity-token-pill:hover {
+        border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.84) !important;
+      }
+      #antigravity-swarm-corner-btn.has-subagents {
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.24) !important;
+        border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.72) !important;
+        color: #f8f0e8 !important;
       }
       #antigravity-token-popover {
         position: absolute;
-        bottom: 34px;
+        bottom: 38px;
         right: 8px;
         z-index: 10001;
-        width: 304px;
-        padding: 11px 12px;
+        width: min(324px, calc(100vw - 24px));
+        padding: 12px 14px;
         border-radius: 12px;
-        background: rgba(11, 12, 19, 0.95);
-        backdrop-filter: blur(14px);
-        -webkit-backdrop-filter: blur(14px);
-        border: 1px solid rgba(var(--agy-accent-rgb, 173, 50, 51), 0.46);
+        background: var(--agy-surface-panel, rgba(11, 12, 19, 0.96));
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.46);
         box-shadow: 0 12px 32px rgba(0, 0, 0, 0.72);
-        color: #f3f4f6;
+        color: var(--agy-text-primary, #f8f0e8);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        font-size: 11.5px;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
         user-select: none;
         box-sizing: border-box;
+      }
+      .agy-pop-metric-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px 12px;
+        padding: 6px 0 8px;
+        margin-bottom: 8px;
+        border-top: 1px solid var(--agy-border-hairline, rgba(255, 255, 255, 0.09));
+        border-bottom: 1px solid var(--agy-border-hairline, rgba(255, 255, 255, 0.09));
+      }
+      .agy-pop-metric-grid.cols-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px 8px;
+      }
+      .agy-pop-metric-cell {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 0;
       }
       .agy-pop-stat-card {
         display: flex;
         flex-direction: column;
         gap: 2px;
-        padding: 5px 7px;
-        border-radius: 7px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.07);
+        padding: 6px 8px;
+        border-radius: 8px;
+        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.05));
       }
       .agy-pop-stat-lbl {
-        font-size: 10px;
-        color: rgba(243, 244, 246, 0.58);
+        font-size: 11.5px;
+        color: var(--agy-text-muted, rgba(248, 224, 192, 0.78));
       }
       .agy-pop-stat-val {
-        font-size: 11.5px;
+        font-size: 12.5px;
         font-weight: 600;
-        color: #f8f0e8;
+        color: var(--agy-text-primary, #f8f0e8);
       }
       .agy-pop-sub-row {
         display: flex;
@@ -1783,29 +2302,31 @@
         justify-content: space-between;
         gap: 6px;
         width: 100%;
-        padding: 4px 6px;
+        padding: 5px 8px;
         border-radius: 6px;
-        border: 1px solid rgba(255, 255, 255, 0.07);
-        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--agy-border-hairline, rgba(255, 255, 255, 0.09));
+        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.04));
+        color: var(--agy-text-primary, #f8f0e8);
+        font-size: 12px;
         cursor: pointer;
         text-align: left;
         transition: background 0.15s ease, border-color 0.15s ease;
       }
       .agy-pop-sub-row:hover {
-        background: rgba(var(--agy-accent-rgb, 173, 50, 51), 0.18);
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.18);
         border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.55);
       }
       .agy-pop-sub-row.is-warn {
         border-color: rgba(245, 158, 11, 0.45);
-        background: rgba(245, 158, 11, 0.08);
+        background: rgba(245, 158, 11, 0.10);
       }
       .agy-pop-tool-chip {
-        padding: 2px 6px;
+        padding: 2px 7px;
         border-radius: 5px;
-        font-size: 10px;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.10);
-        color: rgba(243, 244, 246, 0.84);
+        font-size: 11px;
+        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.06));
+        border: 1px solid var(--agy-border-hairline, rgba(255, 255, 255, 0.10));
+        color: var(--agy-text-secondary, rgba(243, 244, 246, 0.88));
       }
       @keyframes agy-swarm-flow {
         to { stroke-dashoffset: -16; }
@@ -1829,15 +2350,14 @@
         width: 100%;
         height: 4px;
         border-radius: 9999px;
-        background: rgba(255, 255, 255, 0.16);
-        outline: none;
+        background: var(--agy-border-subtle, rgba(255, 255, 255, 0.18));
         cursor: pointer;
       }
       .agy-wp-slider::-webkit-slider-thumb {
         -webkit-appearance: none;
         appearance: none;
-        width: 12px;
-        height: 12px;
+        width: 13px;
+        height: 13px;
         border-radius: 50%;
         background: rgb(var(--agy-accent-bright-rgb, 255, 68, 82));
         border: 1.5px solid #f8f0e8;
@@ -1845,42 +2365,169 @@
       }
       #antigravity-wallpaper-menu {
         position: absolute;
-        bottom: 42px;
+        bottom: 52px;
         right: 16px;
         z-index: 10000;
-        min-width: 244px;
-        max-width: 282px;
-        padding: 10px 12px;
-        border-radius: 12px;
-        background: rgba(11, 12, 19, 0.94);
-        backdrop-filter: blur(14px);
-        -webkit-backdrop-filter: blur(14px);
-        border: 1px solid rgba(var(--agy-accent-rgb, 173, 50, 51), 0.44);
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.70);
-        color: #f3f4f6;
+        width: min(416px, calc(100vw - 24px));
+        max-height: calc(100vh - 80px);
+        overflow-y: auto;
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: var(--agy-surface-panel, rgba(11, 12, 19, 0.96));
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.44);
+        box-shadow: 0 14px 36px rgba(0, 0, 0, 0.74);
+        color: var(--agy-text-primary, #f8f0e8);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        font-size: 11.5px;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
         user-select: none;
         box-sizing: border-box;
       }
-      .agy-wp-menu-chip {
-        padding: 3px 8px;
-        border-radius: 6px;
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        background: rgba(255, 255, 255, 0.05);
-        color: rgba(243, 244, 246, 0.82);
+      .agy-wp-tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--agy-border-hairline, rgba(255, 255, 255, 0.09));
+      }
+      .agy-wp-thumb-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 10px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .agy-wp-thumb-btn {
+        position: relative;
+        appearance: none;
+        -webkit-appearance: none;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        padding: 0;
+        margin: 0;
+        border-radius: 7px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(18, 20, 30, 0.92);
+        color: rgba(243, 244, 246, 0.85);
+        cursor: pointer;
+        display: block;
+        transition: border-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+      }
+      .agy-wp-thumb-btn:hover {
+        border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.76);
+        transform: translateY(-1px);
+      }
+      .agy-wp-thumb-btn.is-active {
+        border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.96);
+        box-shadow: 0 0 0 1px rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.65), 0 4px 10px rgba(0, 0, 0, 0.45);
+      }
+      .agy-wp-thumb-btn.is-locked:not(.is-active) {
+        opacity: 0.46;
+        cursor: not-allowed;
+        transform: none;
+      }
+      .agy-wp-thumb-btn.is-locked:not(.is-active):hover {
+        border-color: rgba(255, 255, 255, 0.22);
+        transform: none;
+      }
+      .agy-wp-thumb-img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        max-width: none;
+        max-height: none;
+        object-fit: cover;
+        display: block;
+        z-index: 1;
+        opacity: 1;
+        pointer-events: none;
+      }
+      .agy-wp-thumb-fallback {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         font-size: 11px;
+        font-weight: 700;
+        color: rgba(243, 244, 246, 0.6);
+        background: linear-gradient(135deg, rgba(var(--agy-accent-rgb, 173, 50, 51), 0.18), rgba(14, 15, 24, 0.92));
+        pointer-events: none;
+      }
+      .agy-wp-thumb-idx {
+        position: absolute;
+        left: 4px;
+        bottom: 4px;
+        z-index: 2;
+        padding: 1px 5px;
+        border-radius: 4px;
+        background: rgba(8, 8, 12, 0.84);
+        color: #f8f0e8;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 14px;
+        pointer-events: none;
+      }
+      .agy-wp-thumb-pins {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        z-index: 2;
+        padding: 1px 5px;
+        border-radius: 4px;
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.95);
+        border: 1px solid rgba(255, 204, 204, 0.50);
+        color: #ffffff;
+        font-size: 11px;
+        font-weight: 800;
+        line-height: 13px;
+        letter-spacing: 0.02em;
+        pointer-events: none;
+      }
+      .agy-wp-lock-note {
+        margin: 0 0 8px;
+        padding: 5px 8px;
+        border-radius: 6px;
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.20);
+        border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.48);
+        color: #ffe2e2;
+        font-size: 11px;
+        line-height: 1.35;
+      }
+      @keyframes agyWpLockPulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(255, 68, 82, 0.75); }
+        50% { box-shadow: 0 0 0 4px rgba(255, 68, 82, 0.25); }
+      }
+      .agy-wp-menu-chip.is-lock-pulse {
+        animation: agyWpLockPulse 0.45s ease 2;
+        border-color: rgba(255, 130, 138, 0.95) !important;
+      }
+      .agy-wp-menu-chip {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        padding: 4px 9px;
+        border-radius: 6px;
+        border: 1px solid var(--agy-border-subtle, rgba(255, 255, 255, 0.14));
+        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.05));
+        color: var(--agy-text-secondary, rgba(243, 244, 246, 0.88));
+        font-size: 11.5px;
         font-weight: 600;
         cursor: pointer;
         transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
       }
       .agy-wp-menu-chip:hover {
-        background: rgba(var(--agy-accent-rgb, 173, 50, 51), 0.22);
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.22);
         border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.65);
-        color: #ffffff;
+        color: var(--agy-text-primary, #ffffff);
       }
       .agy-wp-menu-chip.is-active {
-        background: rgba(var(--agy-accent-rgb, 173, 50, 51), 0.36);
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.36);
         border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.92);
         color: #ffffff;
       }
@@ -1889,35 +2536,38 @@
         align-items: center;
         justify-content: space-between;
         width: 100%;
-        padding: 4px 6px;
+        padding: 5px 7px;
         border: none;
         border-radius: 6px;
         background: transparent;
-        color: rgba(243, 244, 246, 0.88);
-        font-size: 11.5px;
+        color: var(--agy-text-secondary, rgba(243, 244, 246, 0.90));
+        font-size: 12px;
         cursor: pointer;
         text-align: left;
         transition: background 0.15s ease;
       }
       .agy-wp-menu-toggle:hover {
-        background: rgba(255, 255, 255, 0.06);
+        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.06));
       }
       .agy-wp-menu-pill {
-        padding: 1px 6px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
         border-radius: 9999px;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 700;
-        letter-spacing: 0.03em;
+        letter-spacing: 0.02em;
       }
       .agy-wp-menu-pill.is-on {
-        background: rgba(var(--agy-accent-rgb, 173, 50, 51), 0.34);
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.34);
         border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.72);
         color: rgb(var(--agy-secondary-rgb, 248, 224, 192));
       }
       .agy-wp-menu-pill.is-off {
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        color: rgba(156, 163, 175, 0.85);
+        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.06));
+        border: 1px solid var(--agy-border-subtle, rgba(255, 255, 255, 0.16));
+        color: var(--agy-text-muted, rgba(248, 224, 192, 0.78));
       }
       #antigravity-wallpaper-layer {
         transition: opacity 0.65s ease, filter 0.65s ease;
@@ -1964,6 +2614,47 @@
         z-index: 2;
         pointer-events: none;
         display: block;
+      }
+      #antigravity-token-pill:focus-visible,
+      #antigravity-swarm-corner-btn:focus-visible,
+      #antigravity-wallpaper-ctrl:focus-visible,
+      #antigravity-wallpaper-menu button:focus-visible,
+      #antigravity-token-popover button:focus-visible,
+      #antigravity-swarm-modal button:focus-visible,
+      .agy-wp-menu-chip:focus-visible,
+      .agy-wp-menu-toggle:focus-visible,
+      .agy-wp-thumb-btn:focus-visible,
+      .agy-pop-sub-row:focus-visible,
+      .agy-wp-slider:focus-visible {
+        outline: 2px solid rgb(var(--agy-secondary-rgb, 248, 224, 192)) !important;
+        outline-offset: 2px !important;
+      }
+      .agy-swarm-node-g:focus-visible {
+        outline: none;
+      }
+      .agy-swarm-node-g:focus-visible rect:first-of-type {
+        stroke: rgb(var(--agy-secondary-rgb, 248, 224, 192)) !important;
+        stroke-width: 2.5px !important;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .agy-milk-input-box.agy-milk-thinking,
+        .agy-milk-greeting-anim,
+        .agy-swarm-edge-active,
+        .agy-swarm-node-pulse,
+        .agy-wp-menu-chip.is-lock-pulse {
+          animation: none !important;
+        }
+        #antigravity-wallpaper-layer,
+        #antigravity-wp-spotlight,
+        .agy-milk-dialog-box,
+        .agy-milk-input-box,
+        .agy-milk-sidebar,
+        .agy-milk-header,
+        .agy-milk-greeting,
+        .agy-wp-thumb-btn,
+        .agy-wp-menu-chip {
+          transition: none !important;
+        }
       }
     `;
     if (style.textContent !== nextCss) {
@@ -2061,33 +2752,466 @@
       }
       milkActiveSidebarItem = nextActiveItem;
 
-      // 2. Detect & theme top header bar
-      let nextHeader = typeof document.querySelector === 'function'
-        ? document.querySelector('header, [role="banner"]')
-        : null;
-      if (!nextHeader && stage) {
-        const searchRoots = [stage.parentElement, stage.parentElement && stage.parentElement.parentElement, stage];
+      // 2. Detect & theme top header/titlebar strips
+      const nextHeaders = [];
+      const addHeaderCandidate = (el) => {
+        if (!el || nextHeaders.includes(el)) return;
+        if (el === stage || el === milkSidebarEl || el === box) return;
+        if (el.id && el.id.startsWith('antigravity-')) return;
+        if (stage && el.contains && el.contains(stage)) return;
+        if (box && el.contains && el.contains(box)) return;
+        nextHeaders.push(el);
+      };
+      if (typeof document.querySelectorAll === 'function') {
+        for (const hEl of document.querySelectorAll('header, [role="banner"], [role="menubar"], [class*="titlebar" i]')) {
+          const hr = typeof hEl.getBoundingClientRect === 'function' ? hEl.getBoundingClientRect() : null;
+          if (!hr || hr.height === 0 || (hr.top <= 84 && hr.height <= 68 && hr.width >= 300)) {
+            addHeaderCandidate(hEl);
+          }
+        }
+      }
+      if (stage) {
+        const searchRoots = [];
+        let anc = stage.parentElement;
+        let hops = 0;
+        while (anc && hops < 10) {
+          searchRoots.push(anc);
+          if (anc === document.body) break;
+          anc = anc.parentElement;
+          hops++;
+        }
+        if (document.body && !searchRoots.includes(document.body)) {
+          searchRoots.push(document.body);
+        }
         for (const root of searchRoots) {
           if (!root || !root.children) continue;
           for (const ch of Array.from(root.children)) {
             if (!ch || ch === stage || ch === milkSidebarEl || ch === box) continue;
-            if (ch.id === 'antigravity-wallpaper-layer' || ch.id === 'antigravity-wallpaper-ctrl' || ch.id === 'antigravity-wallpaper-menu') continue;
+            if (ch.id === 'antigravity-wallpaper-layer' || ch.id === 'antigravity-wallpaper-ctrl' || ch.id === 'antigravity-wallpaper-menu' || ch.id === 'antigravity-corner-dock' || ch.id === 'antigravity-swarm-corner-btn') continue;
             if (ch.contains && (ch.contains(stage) || (box && ch.contains(box)))) continue;
             const r = typeof ch.getBoundingClientRect === 'function' ? ch.getBoundingClientRect() : null;
-            if (r && r.top <= 48 && r.height >= 24 && r.height <= 56 && r.width >= 360) {
-              nextHeader = ch;
-              break;
+            if (!r) continue;
+            if (r.top <= 84 && r.height >= 20 && r.height <= 64 && r.width >= 360) {
+              addHeaderCandidate(ch);
+            } else if (r.top <= 24 && r.height > 64 && r.height <= 130 && r.width >= 360 && ch.children) {
+              for (const sub of Array.from(ch.children)) {
+                if (!sub || (sub.contains && sub.contains(stage))) continue;
+                const sr = typeof sub.getBoundingClientRect === 'function' ? sub.getBoundingClientRect() : null;
+                if (sr && sr.top <= 84 && sr.height >= 20 && sr.height <= 64 && sr.width >= 360) {
+                  addHeaderCandidate(sub);
+                }
+              }
             }
           }
-          if (nextHeader) break;
         }
       }
-      if (milkHeaderEl && milkHeaderEl !== nextHeader && milkHeaderEl.classList) {
-        milkHeaderEl.classList.remove('agy-milk-header');
+      for (const oldH of milkHeaderEls) {
+        if (oldH && !nextHeaders.includes(oldH) && oldH.classList) {
+          oldH.classList.remove('agy-milk-header');
+        }
       }
-      if (nextHeader && nextHeader.classList) {
-        nextHeader.classList.add('agy-milk-header');
-        milkHeaderEl = nextHeader;
+      for (const h of nextHeaders) {
+        if (h && h.classList) h.classList.add('agy-milk-header');
+      }
+      milkHeaderEls = nextHeaders;
+      milkHeaderEl = nextHeaders[0] || null;
+    } catch (_) {}
+  }
+
+  function normalizeGreetingMode(mode) {
+    return (mode === 'top' || mode === 'center' || mode === 'bottom' || mode === 'hidden') ? mode : 'center';
+  }
+
+  function applyGreetingModeClass(el) {
+    if (!el || !el.classList) return;
+    const mode = normalizeGreetingMode(fxPrefs.greetingMode);
+    el.classList.remove('agy-milk-greeting-top', 'agy-milk-greeting-center', 'agy-milk-greeting-bottom', 'agy-milk-greeting-hidden');
+    el.classList.add(`agy-milk-greeting-${mode}`);
+  }
+
+  function clearHomeGreetingTheme() {
+    if (milkGreetingEl && milkGreetingEl.classList) {
+      milkGreetingEl.classList.remove(
+        'agy-milk-greeting',
+        'agy-milk-greeting-anim',
+        'agy-milk-greeting-top',
+        'agy-milk-greeting-center',
+        'agy-milk-greeting-bottom',
+        'agy-milk-greeting-hidden'
+      );
+    }
+    milkGreetingEl = null;
+  }
+
+  function ensureHomeGreetingTheme(stage, box, inChat) {
+    try {
+      if (inChat || !stage || typeof stage.querySelectorAll !== 'function') {
+        clearHomeGreetingTheme();
+        return;
+      }
+      const greetingRe = /welcome back|good to see you|what'?s next|where should we pick up|ready when you are|how can i help|с возвращением|рад.*видеть|чем займ[её]мся/i;
+      const boxRect = box && typeof box.getBoundingClientRect === 'function' ? box.getBoundingClientRect() : null;
+      const hasBoxGeom = Boolean(boxRect && boxRect.height > 0 && boxRect.top > 0);
+      const nodes = stage.querySelectorAll('h1, h2, h3, h4, p, div, span');
+      let matchEl = null;
+      let matchScore = -1;
+      const limit = Math.min(nodes.length, 360);
+      for (let i = 0; i < limit; i++) {
+        const el = nodes[i];
+        if (!el || el === stage || el === box || el === milkSidebarEl || milkHeaderEls.includes(el)) continue;
+        if (el.id && el.id.startsWith('antigravity-')) continue;
+        if (box && ((box.contains && box.contains(el)) || (el.contains && el.contains(box)))) continue;
+        if (el.closest && el.closest('#antigravity-wallpaper-layer, #antigravity-wallpaper-menu, #antigravity-wallpaper-ctrl, #antigravity-corner-dock, #antigravity-token-stats-bar, button, a, [role="button"], [role="menu"]')) continue;
+        if (el.querySelector && el.querySelector('textarea, input, button, a, select, [role="button"]')) continue;
+        const txt = (el.textContent || '').trim();
+        if (txt.length < 6 || txt.length > 160) continue;
+        if (el.tagName === 'SPAN' && el.parentElement && !el.parentElement.querySelector('textarea, input, button')) {
+          const pTxt = (el.parentElement.textContent || '').trim();
+          if (pTxt.length >= 6 && pTxt.length <= 160) continue;
+        }
+        const r = typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null;
+        if (r && r.height > 140) continue;
+        if (hasBoxGeom && r && r.height > 0 && (r.bottom > boxRect.top + 16 || r.top < 24 || r.width < 80)) continue;
+
+        let fontPx = 0;
+        try {
+          fontPx = parseFloat(window.getComputedStyle(el).fontSize || '0') || 0;
+        } catch (_) {}
+        const isPhrase = greetingRe.test(txt);
+        const isHeadingTag = el.tagName === 'H1' || el.tagName === 'H2' || el.tagName === 'H3';
+        const isLargeText = fontPx >= 17;
+        const isAbovePromptWide = Boolean(hasBoxGeom && r && r.height >= 16 && r.width >= 160 && r.bottom <= boxRect.top);
+        if (!isPhrase && !isHeadingTag && !isLargeText && !isAbovePromptWide) continue;
+
+        let score = 0;
+        if (isPhrase) score += 10;
+        if (isHeadingTag) score += 5;
+        if (isLargeText) score += 4;
+        if (isAbovePromptWide) score += 2;
+        if (score >= matchScore) {
+          matchScore = score;
+          matchEl = el;
+        }
+      }
+      if (!matchEl) {
+        clearHomeGreetingTheme();
+        return;
+      }
+      if (milkGreetingEl && milkGreetingEl !== matchEl) {
+        clearHomeGreetingTheme();
+      }
+      if (matchEl.classList) {
+        matchEl.classList.add('agy-milk-greeting');
+        applyGreetingModeClass(matchEl);
+        if (!isReducedMotion() && (!matchEl.dataset || matchEl.dataset.agyGreetingTyped !== '1')) {
+          matchEl.classList.add('agy-milk-greeting-anim');
+          if (matchEl.dataset) matchEl.dataset.agyGreetingTyped = '1';
+        }
+      }
+      milkGreetingEl = matchEl;
+    } catch (_) {}
+  }
+
+  function hasOverviewCardLandmarks(text) {
+    if (!text) return false;
+    // Allow JSX-concatenated TitleCase boundaries like "OverviewReviewFilesTerminalExtensionsSubagents5Background Tasks14"
+    const hasOverview = /Overview(?=$|[^a-z])/.test(text);
+    const hasActions = /(?:Review|Files|Terminal|Extensions)(?=$|[^a-z])/.test(text);
+    const hasSubs = /Subagents(?=$|[^a-z])/.test(text);
+    const hasBgTasks = /Background Tasks(?=$|[^a-z])/.test(text);
+    return (hasOverview && hasActions) || (hasSubs && hasBgTasks);
+  }
+
+  function clearOverviewPanelTheme() {
+    if (milkOverviewCardEl) {
+      if (milkOverviewCardEl.classList) {
+        milkOverviewCardEl.classList.remove('agy-milk-overview-card');
+      }
+      if (typeof milkOverviewCardEl.querySelectorAll === 'function') {
+        const clean = milkOverviewCardEl.querySelectorAll('.agy-milk-overview-sep, .agy-milk-overview-badge, .agy-milk-overview-inner-bg, .agy-milk-overview-line');
+        for (let i = 0; i < clean.length; i++) {
+          clean[i].classList.remove('agy-milk-overview-sep', 'agy-milk-overview-badge', 'agy-milk-overview-inner-bg', 'agy-milk-overview-line');
+        }
+      }
+    }
+    milkOverviewCardEl = null;
+  }
+
+  function ensureOverviewPanelStylesInScope(el) {
+    try {
+      if (!el || typeof el.getRootNode !== 'function') return;
+      const root = el.getRootNode();
+      if (!root || root === document) return;
+      const hostTarget = root.head || root;
+      if (!hostTarget || typeof hostTarget.querySelector !== 'function') return;
+      if (!hostTarget.querySelector('style[data-agy-milk-overview="1"]')) {
+        const ownerDoc = root.ownerDocument || document;
+        const st = ownerDoc.createElement('style');
+        st.setAttribute('data-agy-milk-overview', '1');
+        st.textContent = OVERVIEW_PANEL_CSS;
+        hostTarget.appendChild(st);
+      }
+    } catch (_) {}
+  }
+
+  function ensureOverviewPanelTheme(stage, box) {
+    try {
+      ensureMilkThemeStyles();
+      const itemRe = /(Overview|Review|Files|Terminal|Extensions|Subagents|Background Tasks)(?=$|[^a-z])/;
+      const scrollFeed = stage && box ? findScrollFeedInStage(stage, box) : null;
+      const chatTargets = stage && box ? findChatMessageTargets(stage, box) : [];
+      const isInsideChatStream = (el) => {
+        if (!el) return false;
+        if (el.closest && el.closest('.agy-milk-dialog-box, article, [data-message-id], table, pre, code')) return true;
+        for (let i = 0; i < chatTargets.length; i++) {
+          const ct = chatTargets[i];
+          if (ct && (ct === el || (ct.contains && ct.contains(el)))) return true;
+        }
+        return false;
+      };
+
+      let cardCandidate = null;
+      if (milkOverviewCardEl && milkOverviewCardEl.isConnected) {
+        const isNativeClass = milkOverviewCardEl.classList && milkOverviewCardEl.classList.contains('animate-overview-panel');
+        const prevTxt = (milkOverviewCardEl.textContent || '');
+        if ((isNativeClass || (hasOverviewCardLandmarks(prevTxt) && prevTxt.length <= 360)) && !isInsideChatStream(milkOverviewCardEl)) {
+          let visible = true;
+          try {
+            const cst = window.getComputedStyle(milkOverviewCardEl);
+            if (cst && (cst.display === 'none' || cst.visibility === 'hidden')) visible = false;
+          } catch (_) {}
+          if (visible) cardCandidate = milkOverviewCardEl;
+        }
+      }
+
+      const maxH = (window.innerHeight || 900) * 0.94;
+      const scoreOverviewAncestors = (startEl) => {
+        let cur = startEl;
+        let bestCard = null;
+        let bestScore = -999;
+        for (let depth = 0; cur && depth < 16; depth++) {
+          if (cur === stage || cur === document.body || cur === document.documentElement || cur === milkSidebarEl || milkHeaderEls.includes(cur)) break;
+          if (stage && cur.contains && cur.contains(stage)) break;
+          if (isModOwnedNode(cur)) break;
+          if (box && (cur === box || (cur.contains && cur.contains(box)))) break;
+          if (cur.classList && cur.classList.contains('agy-milk-dialog-box')) break;
+          if (cur.nodeType && cur.nodeType !== 1) {
+            cur = cur.parentNode || cur.parentElement;
+            continue;
+          }
+          if (isInsideChatStream(cur)) break;
+
+          const isNativePanel = Boolean(cur.classList && cur.classList.contains('animate-overview-panel'));
+          const cText = (cur.textContent || '').trim();
+          if (!isNativePanel && cText.length > 360) break;
+          if (isNativePanel || hasOverviewCardLandmarks(cText)) {
+            const win = (cur.ownerDocument && cur.ownerDocument.defaultView) || window;
+            const r = typeof cur.getBoundingClientRect === 'function' ? cur.getBoundingClientRect() : null;
+            if (r && r.width > 540) break;
+            if (r && r.height > maxH) break;
+            const fitsCard = !r || r.width === 0 || (r.width >= 150 && r.width <= 540 && r.height >= 90 && r.height <= maxH);
+            if (fitsCard) {
+              let score = 1;
+              if (cur.classList && cur.classList.contains('animate-overview-panel')) score += 12;
+              if (/Overview(?=$|[^a-z])/.test(cText) && (/Subagents(?=$|[^a-z])/.test(cText) || /Background Tasks(?=$|[^a-z])/.test(cText))) {
+                score += 6;
+              }
+              if (cText.length <= 240) score += 6;
+              if (r && r.width >= 180 && r.width <= 440) score += 5;
+              const svgs = typeof cur.querySelectorAll === 'function' ? cur.querySelectorAll('svg').length : 0;
+              if (svgs >= 4) score += 10;
+              const roleAttr = cur.getAttribute ? (cur.getAttribute('role') || '') : '';
+              if (roleAttr === 'dialog' || roleAttr === 'menu') score += 8;
+              if (scrollFeed && scrollFeed.contains && scrollFeed.contains(cur)) score -= 20;
+
+              let posFloating = false;
+              try {
+                const st = win.getComputedStyle(cur);
+                if (st && (st.display === 'none' || st.visibility === 'hidden')) {
+                  cur = cur.parentElement;
+                  continue;
+                }
+                if (st && (st.position === 'fixed' || st.position === 'absolute')) {
+                  posFloating = true;
+                  score += 10;
+                }
+                const hasBorder = st && parseFloat(st.borderTopWidth) > 0;
+                const hasRadius = st && parseFloat(st.borderRadius) > 0;
+                const hasBg = st && st.backgroundColor && st.backgroundColor !== 'transparent' && st.backgroundColor !== 'rgba(0, 0, 0, 0)';
+                if (hasBorder) score += 4;
+                if (hasRadius) score += 4;
+                if (hasBg) score += 3;
+                if (!hasBorder && !hasRadius && !hasBg) score -= 2;
+              } catch (_) {}
+
+              // Do not pick plain scrollFeed prose unless it is clearly a floating/dialog UI
+              if (scrollFeed && scrollFeed.contains && scrollFeed.contains(cur) && !posFloating && svgs < 3 && roleAttr !== 'dialog' && roleAttr !== 'menu') {
+                cur = cur.parentElement;
+                continue;
+              }
+
+              if (score > bestScore) {
+                bestScore = score;
+                bestCard = cur;
+              }
+            }
+          }
+          cur = cur.parentElement || (cur.parentNode && cur.parentNode.host ? cur.parentNode.host : null);
+        }
+        return bestCard ? { el: bestCard, score: bestScore } : null;
+      };
+
+      let bestOverall = null;
+      const considerHit = (hit) => {
+        if (!hit || !hit.el) return;
+        if (!bestOverall || hit.score > bestOverall.score) {
+          bestOverall = hit;
+        }
+      };
+
+      // Defer expensive shadow/iframe root discovery unless Overview panel is not yet cached
+      const searchRoots = [];
+      if (!cardCandidate) {
+        if (document.body) searchRoots.push({ doc: document, root: document.body });
+        try {
+          const frames = document.querySelectorAll('iframe');
+          for (let i = 0; i < Math.min(frames.length, 8); i++) {
+            try {
+              const fDoc = frames[i].contentDocument;
+              if (fDoc && fDoc.body) searchRoots.push({ doc: fDoc, root: fDoc.body });
+            } catch (_) {}
+          }
+        } catch (_) {}
+
+        const seenRoots = new Set();
+        for (let idx = 0; idx < searchRoots.length && idx < 24; idx++) {
+          const entry = searchRoots[idx];
+          if (!entry || !entry.root || seenRoots.has(entry.root)) continue;
+          seenRoots.add(entry.root);
+          try {
+            if (typeof entry.root.querySelectorAll === 'function') {
+              const all = entry.root.querySelectorAll('*');
+              const cap = Math.min(all.length, 600);
+              for (let k = 0; k < cap; k++) {
+                if (all[k] && all[k].shadowRoot && !seenRoots.has(all[k].shadowRoot)) {
+                  searchRoots.push({ doc: entry.doc, root: all[k].shadowRoot });
+                }
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      // Pass 1: Fast floating-popover / dialog selector match across all scopes
+      if (!cardCandidate) {
+        const popSel = '.animate-overview-panel, [role="dialog"], [role="menu"], [data-radix-popper-content-wrapper] > *, [data-state="open"]';
+        for (const entry of searchRoots) {
+          if (!entry || !entry.root || typeof entry.root.querySelectorAll !== 'function') continue;
+          const pops = entry.root.querySelectorAll(popSel);
+          for (let i = 0; i < pops.length; i++) {
+            const p = pops[i];
+            if (!p || isModOwnedNode(p) || p === box || (box && box.contains && box.contains(p))) continue;
+            if ((p.classList && p.classList.contains('animate-overview-panel')) || hasOverviewCardLandmarks(p.textContent || '')) {
+              considerHit(scoreOverviewAncestors(p));
+            }
+          }
+        }
+      }
+
+      // Pass 2: TreeWalker text-node discovery evaluating all matches (avoids chat-feed hijacking)
+      if (!cardCandidate && typeof NodeFilter !== 'undefined') {
+        const labelRe = /^(?:Overview|Subagents|Background Tasks)\b/i;
+        const skipTags = new Set(['SCRIPT', 'STYLE', 'SVG', 'CANVAS', 'PRE', 'CODE', 'TEXTAREA', 'INPUT', 'BLOCKQUOTE']);
+        for (const entry of searchRoots) {
+          if (!entry || !entry.doc || !entry.root || typeof entry.doc.createTreeWalker !== 'function') continue;
+          const walker = entry.doc.createTreeWalker(
+            entry.root,
+            NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+            {
+              acceptNode(node) {
+                if (!node) return NodeFilter.FILTER_SKIP;
+                if (node.nodeType === 1) {
+                  const tag = (node.tagName || '').toUpperCase();
+                  if (skipTags.has(tag)) return NodeFilter.FILTER_REJECT;
+                  if (node === box || node === milkSidebarEl || isModOwnedNode(node)) return NodeFilter.FILTER_REJECT;
+                  if (node.classList && node.classList.contains('agy-milk-dialog-box')) return NodeFilter.FILTER_REJECT;
+                  return NodeFilter.FILTER_SKIP;
+                }
+                if (node.nodeType === 3) {
+                  const txt = node.nodeValue ? node.nodeValue.trim() : '';
+                  if (txt.length >= 6 && txt.length <= 32 && labelRe.test(txt)) {
+                    return NodeFilter.FILTER_ACCEPT;
+                  }
+                }
+                return NodeFilter.FILTER_SKIP;
+              }
+            }
+          );
+
+          let curText;
+          let safety = 0;
+          while ((curText = walker.nextNode()) && safety++ < 6000) {
+            const anchor = curText.parentElement;
+            if (!anchor || milkHeaderEls.includes(anchor)) continue;
+            if (isInsideChatStream(anchor)) continue;
+            if (anchor.closest && anchor.closest('#antigravity-wallpaper-layer, #antigravity-wallpaper-menu, #antigravity-corner-dock, #antigravity-token-stats-bar, #antigravity-swarm-modal, .agy-milk-dialog-box')) {
+              continue;
+            }
+            considerHit(scoreOverviewAncestors(anchor));
+          }
+        }
+        if (bestOverall) cardCandidate = bestOverall.el;
+      } else if (!cardCandidate && bestOverall) {
+        cardCandidate = bestOverall.el;
+      }
+
+      if (!cardCandidate) {
+        clearOverviewPanelTheme();
+        return;
+      }
+      if (milkOverviewCardEl && milkOverviewCardEl !== cardCandidate) {
+        clearOverviewPanelTheme();
+      }
+      ensureOverviewPanelStylesInScope(cardCandidate);
+      if (cardCandidate.classList) {
+        cardCandidate.classList.add('agy-milk-overview-card');
+      }
+      milkOverviewCardEl = cardCandidate;
+
+      // Subtle divider tinting, inner opaque wrapper cleanup, & crimson count pills
+      if (typeof cardCandidate.querySelectorAll === 'function') {
+        const inner = cardCandidate.querySelectorAll('div, span');
+        const innerCap = Math.min(inner.length, 160);
+        const cardWin = (cardCandidate.ownerDocument && cardCandidate.ownerDocument.defaultView) || window;
+        for (let i = 0; i < innerCap; i++) {
+          const sub = inner[i];
+          if (!sub || !sub.classList) continue;
+          try {
+            const st = cardWin.getComputedStyle(sub);
+            if (st && (parseFloat(st.borderTopWidth) > 0 || parseFloat(st.borderBottomWidth) > 0)) {
+              sub.classList.add('agy-milk-overview-sep');
+            }
+            const t = (sub.textContent || '').trim();
+            const sr = typeof sub.getBoundingClientRect === 'function' ? sub.getBoundingClientRect() : null;
+            if (sr && sr.height > 0 && sr.height <= 2 && sr.width >= 100 && !t) {
+              sub.classList.add('agy-milk-overview-line');
+              continue;
+            }
+            if (/^\d{1,4}$/.test(t) && (!sub.children || sub.children.length === 0)) {
+              const p1 = sub.parentElement ? (sub.parentElement.textContent || '') : '';
+              const p2 = sub.parentElement && sub.parentElement.parentElement ? (sub.parentElement.parentElement.textContent || '') : '';
+              if ((p1.length < 60 && itemRe.test(p1)) || (p2.length < 60 && itemRe.test(p2))) {
+                sub.classList.add('agy-milk-overview-badge');
+              }
+            } else if (st && st.backgroundColor && st.backgroundColor !== 'transparent' && st.backgroundColor !== 'rgba(0, 0, 0, 0)') {
+              const alphaMatch = st.backgroundColor.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([0-9.]+)\)/i);
+              const alpha = alphaMatch ? parseFloat(alphaMatch[1]) : 1;
+              if (alpha >= 0.45 && sub.tagName === 'DIV' && (!sub.getAttribute || sub.getAttribute('role') !== 'button')) {
+                sub.classList.add('agy-milk-overview-inner-bg');
+              }
+            }
+          } catch (_) {}
+        }
       }
     } catch (_) {}
   }
@@ -2102,7 +3226,7 @@
       const node = queue.shift();
       visited++;
       if (!node || node === box || (box.contains && box.contains(node))) continue;
-      if (node.id === 'antigravity-wallpaper-layer' || node.id === 'antigravity-wallpaper-ctrl' || node.id === 'antigravity-wallpaper-menu' || node.id === 'antigravity-wp-fx-canvas') continue;
+      if (node.id === 'antigravity-wallpaper-layer' || node.id === 'antigravity-wallpaper-ctrl' || node.id === 'antigravity-wallpaper-menu' || node.id === 'antigravity-wp-fx-canvas' || node.id === 'antigravity-corner-dock') continue;
       try {
         const st = window.getComputedStyle(node);
         const isScroll = st && (st.overflowY === 'auto' || st.overflowY === 'scroll');
@@ -2332,7 +3456,7 @@
     }
     if (stage.children) {
       for (const ch of Array.from(stage.children)) {
-        if (ch && ch.id !== 'antigravity-wallpaper-layer' && ch.id !== 'antigravity-wallpaper-ctrl' && ch.id !== 'antigravity-wallpaper-menu' && ch.id !== 'antigravity-wp-fx-canvas' && ch !== box && (!box.contains || !box.contains(ch))) {
+        if (ch && ch.id !== 'antigravity-wallpaper-layer' && ch.id !== 'antigravity-wallpaper-ctrl' && ch.id !== 'antigravity-wallpaper-menu' && ch.id !== 'antigravity-wp-fx-canvas' && ch.id !== 'antigravity-corner-dock' && ch !== box && (!box.contains || !box.contains(ch))) {
           candidates.push(ch);
           if (ch.children) {
             for (const sub of Array.from(ch.children)) {
@@ -2346,7 +3470,7 @@
     const bgWrites = [];
     for (const el of candidates) {
       if (!el || el === box || (box.contains && box.contains(el))) continue;
-      if (el.classList && (el.classList.contains('agy-milk-dialog-box') || el.classList.contains('agy-milk-input-box'))) continue;
+      if (el.classList && (el.classList.contains('agy-milk-dialog-box') || el.classList.contains('agy-milk-input-box') || el.classList.contains('agy-milk-overview-card'))) continue;
       if (el.dataset && ('agyOrigBg' in el.dataset) && el.style && el.style.backgroundColor === 'transparent') continue;
       try {
         const containsBox = typeof el.contains === 'function' ? el.contains(box) : false;
@@ -2373,7 +3497,7 @@
     const gradCandidates = [];
     const collectShallow = (node, depth) => {
       if (!node || depth > 8 || node === box || (box.contains && box.contains(node))) return;
-      if (node.id === 'antigravity-wallpaper-layer' || node.id === 'antigravity-wallpaper-ctrl' || node.id === 'antigravity-wallpaper-menu' || node.id === 'antigravity-wp-fx-canvas') return;
+      if (node.id === 'antigravity-wallpaper-layer' || node.id === 'antigravity-wallpaper-ctrl' || node.id === 'antigravity-wallpaper-menu' || node.id === 'antigravity-wp-fx-canvas' || node.id === 'antigravity-corner-dock') return;
       gradCandidates.push(node);
       if (node.children) {
         for (const ch of Array.from(node.children)) collectShallow(ch, depth + 1);
@@ -2442,8 +3566,8 @@
   function ensureStageChildrenAbove(container) {
     if (!container || !container.children) return;
     for (const child of Array.from(container.children)) {
-      if (!child || child === milkSidebarEl || child === milkHeaderEl) continue;
-      if (child.id === 'antigravity-wallpaper-layer' || child.id === 'antigravity-wallpaper-ctrl' || child.id === 'antigravity-wallpaper-menu' || child.id === 'antigravity-wp-fx-canvas') continue;
+      if (!child || child === milkSidebarEl || child === milkHeaderEl || milkHeaderEls.includes(child)) continue;
+      if (child.id === 'antigravity-wallpaper-layer' || child.id === 'antigravity-wallpaper-ctrl' || child.id === 'antigravity-wallpaper-menu' || child.id === 'antigravity-wp-fx-canvas' || child.id === 'antigravity-corner-dock') continue;
       try {
         const st = window.getComputedStyle(child);
         if (st && st.position === 'static') {
@@ -2539,7 +3663,10 @@
         vid.playsInline = true;
         vid.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
         targetSlotEl.appendChild(vid);
-        vid.play && vid.play().catch && vid.play().catch(() => {});
+        if (typeof vid.play === 'function') {
+          const playRet = vid.play();
+          if (playRet && typeof playRet.catch === 'function') playRet.catch(() => {});
+        }
       } else {
         const img = document.createElement('img');
         img.alt = '';
@@ -2634,6 +3761,21 @@
     if (fxVhsRestoreTimer) {
       clearTimeout(fxVhsRestoreTimer);
       fxVhsRestoreTimer = 0;
+    }
+    if (isReducedMotion()) {
+      if (targetSlotEl && targetSlotEl.style) {
+        targetSlotEl.style.transition = 'none';
+        targetSlotEl.style.filter = '';
+        targetSlotEl.style.transform = '';
+        targetSlotEl.style.opacity = '1';
+      }
+      if (prevSlotEl && prevSlotEl.style) {
+        prevSlotEl.style.transition = 'none';
+        prevSlotEl.style.opacity = '0';
+      }
+      fxChannelSwitchBands = [];
+      fxChannelSwitchUntil = 0;
+      return;
     }
     if (targetSlotEl && targetSlotEl.style) {
       targetSlotEl.style.transition = 'opacity 0.22s ease, filter 0.16s ease, transform 0.16s ease';
@@ -2765,6 +3907,20 @@
         }
         wallpaperBlobCache.clear();
       }
+      if (wallpaperThumbCache && typeof wallpaperThumbCache.values === 'function') {
+        for (const entry of wallpaperThumbCache.values()) {
+          if (entry && entry.revokeOnClear && entry.url && typeof URL.revokeObjectURL === 'function') {
+            try { URL.revokeObjectURL(entry.url); } catch (_) {}
+          }
+        }
+        wallpaperThumbCache.clear();
+      }
+      wallpaperThumbInflight.clear();
+      if (wpLockHintTimer) {
+        clearTimeout(wpLockHintTimer);
+        wpLockHintTimer = 0;
+      }
+      wpLockHintMsg = '';
     }
   }
   window.__antigravity_stop_fx = stopHomeAtmosphereFx;
@@ -2809,7 +3965,7 @@
 
   function scheduleNextHomeGlitch() {
     if (fxGlitchWaitTimer) clearTimeout(fxGlitchWaitTimer);
-    if (isAppInactive() || getConversationIdFromLocation()) return;
+    if (isAppInactive() || getConversationIdFromLocation() || isReducedMotion()) return;
     const delayMs = 15000 + Math.floor(Math.random() * 5000);
     fxGlitchWaitTimer = setTimeout(() => {
       fxGlitchWaitTimer = 0;
@@ -2868,7 +4024,7 @@
 
   function stepHomeAtmosphereFrame(ts) {
     fxRafId = 0;
-    if (isAppInactive()) {
+    if (isAppInactive() || isReducedMotion()) {
       stopHomeAtmosphereFx(false, isWindowBlurred && !document.hidden);
       return;
     }
@@ -3034,24 +4190,28 @@
       stopHomeAtmosphereFx(false, isWindowBlurred && !document.hidden);
       return;
     }
+    const reduced = isReducedMotion();
     if (enableHomeCrt && fxPrefs.crt) {
       if (crt) crt.style.display = 'block';
-      if (!fxGlitchWaitTimer && !fxGlitchEndTimer) {
+      if (reduced) {
+        stopHomeGlitchOnly();
+        if (crt) crt.style.display = 'block';
+      } else if (!fxGlitchWaitTimer && !fxGlitchEndTimer) {
         scheduleNextHomeGlitch();
       }
     } else {
       stopHomeGlitchOnly();
     }
     if (spotlight) {
-      spotlight.style.display = fxPrefs.spotlight ? 'block' : 'none';
-      if (!fxPrefs.spotlight) spotlight.style.opacity = '0';
+      spotlight.style.display = (!reduced && fxPrefs.spotlight) ? 'block' : 'none';
+      if (reduced || !fxPrefs.spotlight) spotlight.style.opacity = '0';
     }
-    const vhsActive = fxChannelSwitchUntil > Date.now();
-    const showCanvas = Boolean(fxPrefs.particles || vhsActive || (enableHomeCrt && fxPrefs.crt));
+    const vhsActive = !reduced && fxChannelSwitchUntil > Date.now();
+    const showCanvas = !reduced && Boolean(fxPrefs.particles || vhsActive || (enableHomeCrt && fxPrefs.crt));
     if (canvas) {
       canvas.style.display = showCanvas ? 'block' : 'none';
     }
-    const needsRaf = Boolean(fxPrefs.particles || fxPrefs.parallax || fxPrefs.spotlight || vhsActive);
+    const needsRaf = !reduced && Boolean(fxPrefs.particles || fxPrefs.parallax || fxPrefs.spotlight || vhsActive);
     if (needsRaf) {
       installHomeMouseTracker();
       if (!fxRafId && typeof requestAnimationFrame === 'function') {
@@ -3073,14 +4233,53 @@
     }
   }
 
+  function getWallpaperMenuHost(ctrlEl) {
+    if (!ctrlEl) return null;
+    if (ctrlEl.parentElement && ctrlEl.parentElement.id === 'antigravity-corner-dock') {
+      return ctrlEl.parentElement.parentElement;
+    }
+    return ctrlEl.parentElement;
+  }
+
+  function updateSwarmCornerButton(stats) {
+    const btn = document.getElementById('antigravity-swarm-corner-btn');
+    if (!btn) return;
+    const s = stats || lastStatsData || DEFAULT_ZERO_STATS;
+    const count = s.subagentCount || 0;
+    const activeCount = Array.isArray(s.subagents) ? s.subagents.filter((x) => x && x.isActive).length : 0;
+    if (btn.classList) {
+      if (count > 0) btn.classList.add('has-subagents');
+      else btn.classList.remove('has-subagents');
+    }
+    const pulseDot = activeCount > 0
+      ? '<span style="width:6px;height:6px;border-radius:9999px;background:rgb(var(--agy-accent-bright-rgb,255,68,82));box-shadow:0 0 6px rgb(var(--agy-accent-bright-rgb,255,68,82));display:inline-block;flex-shrink:0;"></span>'
+      : '';
+    btn.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.92;flex-shrink:0;">
+        <circle cx="5" cy="12" r="2.5"></circle>
+        <circle cx="19" cy="6" r="2.5"></circle>
+        <circle cx="19" cy="18" r="2.5"></circle>
+        <path d="M7.3 11.1 16.7 6.9"></path>
+        <path d="M7.3 12.9 16.7 17.1"></path>
+      </svg>
+      <span>${count > 0 ? `Рой · ${count}` : 'Рой'}</span>
+      ${pulseDot}
+    `;
+    btn.title = count > 0
+      ? `Карта роя субагентов (${count}, активно: ${activeCount}) · Нажмите, чтобы открыть граф`
+      : 'Карта роя агентов · Нажмите, чтобы открыть';
+  }
+
   async function ensureHomeWallpaper() {
     if (isCheckingWallpaper) return;
     isCheckingWallpaper = true;
     try {
+      await hydrateFxPrefsFromDisk();
       ensureMilkThemeStyles();
       const convId = getConversationIdFromLocation();
       const inChat = Boolean(convId);
       let layer = document.getElementById('antigravity-wallpaper-layer');
+      let dock = document.getElementById('antigravity-corner-dock');
       let ctrl = document.getElementById('antigravity-wallpaper-ctrl');
 
       if (document.hidden) {
@@ -3098,12 +4297,16 @@
         stopHomeAtmosphereFx(false);
         if (layer) layer.style.display = 'none';
         if (ctrl) ctrl.style.display = 'none';
+        closeWallpaperMenu(false);
+        syncSurfaceThemeClass();
         clearChatMessageBackdrops();
         restoreStageBackdrops();
         return;
       }
 
       ensureSidebarAndHeaderTheme(stage, box, convId);
+      ensureHomeGreetingTheme(stage, box, inChat);
+      ensureOverviewPanelTheme(stage, box);
 
       try {
         const stageStyle = window.getComputedStyle(stage);
@@ -3183,72 +4386,94 @@
         layer.appendChild(crtEl);
       }
 
-      if (!ctrl || ctrl.parentElement !== stage) {
+      if (!dock || dock.parentElement !== stage) {
+        if (!dock) {
+          dock = document.createElement('div');
+          dock.id = 'antigravity-corner-dock';
+          dock.style.cssText = [
+            'position: absolute',
+            'top: auto',
+            'bottom: 14px',
+            'right: 16px',
+            'z-index: 9999',
+            'display: flex',
+            'align-items: center',
+            'gap: 8px'
+          ].join(';');
+        }
+        stage.appendChild(dock);
+      }
+
+      const cornerPillBaseCss = [
+        'display: inline-flex',
+        'align-items: center',
+        'justify-content: center',
+        'gap: 6px',
+        'min-height: 31px',
+        'padding: 6px 13px',
+        'border-radius: 9999px',
+        'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        'font-size: 12.5px',
+        'font-weight: 600',
+        'line-height: 1',
+        'color: rgba(243, 244, 246, 0.92)',
+        'background: rgba(15, 15, 22, 0.72)',
+        'border: 1px solid rgba(255, 255, 255, 0.16)',
+        'backdrop-filter: blur(10px)',
+        'cursor: pointer',
+        'opacity: 0.90',
+        'transition: opacity 0.15s ease, background 0.15s ease, border-color 0.25s ease, transform 0.12s ease'
+      ].join(';');
+
+      let swarmCornerBtn = document.getElementById('antigravity-swarm-corner-btn');
+      if (!swarmCornerBtn || swarmCornerBtn.parentElement !== dock) {
+        if (!swarmCornerBtn) {
+          swarmCornerBtn = document.createElement('button');
+          swarmCornerBtn.id = 'antigravity-swarm-corner-btn';
+          swarmCornerBtn.type = 'button';
+          swarmCornerBtn.style.cssText = cornerPillBaseCss;
+          swarmCornerBtn.onmouseenter = () => { swarmCornerBtn.style.opacity = '1'; };
+          swarmCornerBtn.onmouseleave = () => { swarmCornerBtn.style.opacity = '0.90'; };
+          swarmCornerBtn.onclick = (e) => {
+            if (e && e.stopPropagation) e.stopPropagation();
+            const curBox = findInputBox();
+            toggleSwarmModal(lastStatsData, getActiveModelName(curBox));
+          };
+        }
+        dock.appendChild(swarmCornerBtn);
+      }
+      updateSwarmCornerButton(lastStatsData);
+
+      if (!ctrl || ctrl.parentElement !== dock) {
         if (!ctrl) {
           ctrl = document.createElement('button');
           ctrl.id = 'antigravity-wallpaper-ctrl';
           ctrl.type = 'button';
-          ctrl.style.cssText = [
-            'position: absolute',
-            'top: auto',
-            'bottom: 12px',
-            'right: 16px',
-            'z-index: 9999',
-            'padding: 3px 9px',
-            'border-radius: 9999px',
-            'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-            'font-size: 11px',
-            'font-weight: 600',
-            'color: rgba(243, 244, 246, 0.85)',
-            'background: rgba(15, 15, 20, 0.55)',
-            'border: 1px solid rgba(255, 255, 255, 0.14)',
-            'backdrop-filter: blur(8px)',
-            'cursor: pointer',
-            'opacity: 0.65',
-            'transition: opacity 0.15s ease, background 0.15s ease, bottom 0.2s ease, border-color 0.25s ease'
-          ].join(';');
-          ctrl.onmouseenter = () => {
-            ctrl.style.opacity = '1';
-            if (wpMenuCloseTimer) {
-              clearTimeout(wpMenuCloseTimer);
-              wpMenuCloseTimer = 0;
+          ctrl.style.cssText = cornerPillBaseCss;
+          ctrl.setAttribute('aria-haspopup', 'dialog');
+          ctrl.setAttribute('aria-expanded', 'false');
+          ctrl.setAttribute('aria-controls', 'antigravity-wallpaper-menu');
+          ctrl.onmouseenter = () => { ctrl.style.opacity = '1'; };
+          ctrl.onmouseleave = () => { ctrl.style.opacity = '0.90'; };
+          ctrl.onclick = (e) => {
+            if (e && e.stopPropagation) e.stopPropagation();
+            const existingMenu = document.getElementById('antigravity-wallpaper-menu');
+            if (existingMenu && existingMenu.style && existingMenu.style.display !== 'none') {
+              closeWallpaperMenu(false);
+            } else {
+              openWallpaperMenu(getWallpaperMenuHost(ctrl), true);
             }
-            if (wpMenuOpenTimer) clearTimeout(wpMenuOpenTimer);
-            wpMenuOpenTimer = setTimeout(() => {
-              wpMenuOpenTimer = 0;
-              openWallpaperMenu(ctrl.parentElement, false);
-            }, 140);
           };
-          ctrl.onmouseleave = () => {
-            ctrl.style.opacity = '0.65';
-            if (wpMenuOpenTimer) {
-              clearTimeout(wpMenuOpenTimer);
-              wpMenuOpenTimer = 0;
-            }
-            scheduleCloseWallpaperMenu();
-          };
-          ctrl.oncontextmenu = (e) => {
+          ctrl.oncontextmenu = async (e) => {
             if (e && e.preventDefault) e.preventDefault();
             if (e && e.stopPropagation) e.stopPropagation();
-            if (wpMenuOpenTimer) {
-              clearTimeout(wpMenuOpenTimer);
-              wpMenuOpenTimer = 0;
-            }
-            if (wpMenuCloseTimer) {
-              clearTimeout(wpMenuCloseTimer);
-              wpMenuCloseTimer = 0;
-            }
-            openWallpaperMenu(ctrl.parentElement, true);
-          };
-          ctrl.onclick = async (e) => {
-            e.stopPropagation();
+            await refreshWallpaperList(false);
             const curInChat = Boolean(getConversationIdFromLocation());
-            if (curInChat && fxPrefs.chatWpFile) {
-              fxPrefs.chatWpFile = '';
-              saveFxPrefs();
-            } else if (!curInChat && fxPrefs.homeWpFile) {
-              fxPrefs.homeWpFile = '';
-              saveFxPrefs();
+            if (isWallpaperLockedHere(curInChat)) {
+              triggerWallpaperLockHint(curInChat);
+              wpMenuActiveTab = 'scenes';
+              openWallpaperMenu(getWallpaperMenuHost(ctrl), true);
+              return;
             }
             await refreshWallpaperList(true);
             if (wallpaperFiles.length > 0) {
@@ -3256,19 +4481,22 @@
             }
           };
         }
-        stage.appendChild(ctrl);
+        dock.appendChild(ctrl);
       }
+
+      const staleMenuBtn = document.getElementById('antigravity-wallpaper-menu-btn');
+      if (staleMenuBtn) staleMenuBtn.remove();
 
       let wpMenu = document.getElementById('antigravity-wallpaper-menu');
       if (wpMenu && wpMenu.parentElement !== stage) {
         stage.appendChild(wpMenu);
       }
 
-      ctrl.style.top = 'auto';
-      ctrl.style.bottom = '12px';
+      dock.style.top = 'auto';
+      dock.style.bottom = '14px';
 
       // Heavy style scan (getComputedStyle over many nodes): only when the DOM/size/chat actually changed,
-      // plus a forced refresh every ~5th tick as a safety net.
+      // plus a forced refresh every ~20 ticks as a safety net.
       let scanSig = '';
       try {
         const sr = typeof stage.getBoundingClientRect === 'function' ? stage.getBoundingClientRect() : null;
@@ -3279,7 +4507,7 @@
           stage.getElementsByTagName ? stage.getElementsByTagName('*').length : 0
         ].join('|');
       } catch (_) {}
-      if (needsRemount || scanSig !== backdropScanSignature || backdropScanSkips >= 4) {
+      if (needsRemount || scanSig !== backdropScanSignature || backdropScanSkips >= 20) {
         backdropScanSignature = scanSig;
         backdropScanSkips = 0;
         clearLargeOpaqueBackdrops(stage, box);
@@ -3289,17 +4517,19 @@
       ensureChatMessageBackdrop(stage, box, inChat);
       ensureStageChildrenAbove(stage);
       layer.style.display = 'block';
+      syncSurfaceThemeClass();
       if (layer.classList) {
         if (isWindowBlurred) layer.classList.add('agy-wp-sleeping');
         else layer.classList.remove('agy-wp-sleeping');
       }
-      ctrl.style.display = files.length > 0 ? 'block' : 'none';
+      ctrl.style.display = files.length > 0 ? 'inline-flex' : 'none';
       syncHomeAtmosphereFx(!isAppInactive(), !inChat && !isAppInactive(), layer);
 
       const vids = layer.querySelectorAll ? layer.querySelectorAll('video') : [];
       for (const v of vids) {
-        if (v.parentElement && v.parentElement.style && v.parentElement.style.opacity === '1' && v.paused && v.play) {
-          v.play().catch(() => {});
+        if (v.parentElement && v.parentElement.style && v.parentElement.style.opacity === '1' && v.paused && typeof v.play === 'function') {
+          const playRet = v.play();
+          if (playRet && typeof playRet.catch === 'function') playRet.catch(() => {});
         }
       }
 
@@ -3329,15 +4559,260 @@
     }
   }
 
+  function formatWallpaperSceneName(fileName) {
+    if (!fileName) return '';
+    return String(fileName)
+      .replace(/^\d+[_-]?/, '')
+      .replace(/\.[^.]+$/, '')
+      .replace(/[_-]+/g, ' ')
+      .trim() || fileName;
+  }
+
+  function isWallpaperLockedHere(inChat) {
+    const pinned = inChat ? fxPrefs.chatWpFile : fxPrefs.homeWpFile;
+    return Boolean(pinned && wallpaperFiles.includes(pinned));
+  }
+
+  function triggerWallpaperLockHint(inChat) {
+    const btnLabel = inChat ? 'Чат' : 'Home';
+    wpLockHintMsg = `Обои закреплены для «${btnLabel}». Нажмите «${btnLabel}» ниже, чтобы открепить.`;
+    if (wpLockHintTimer) {
+      clearTimeout(wpLockHintTimer);
+    }
+    wpLockHintTimer = setTimeout(() => {
+      wpLockHintTimer = 0;
+      wpLockHintMsg = '';
+      const menu = document.getElementById('antigravity-wallpaper-menu');
+      if (menu && menu.style && menu.style.display !== 'none') {
+        renderWallpaperMenu(menu);
+      }
+    }, 3200);
+  }
+
+  function clearWallpaperThumbCache() {
+    for (const entry of wallpaperThumbCache.values()) {
+      if (entry && entry.revokeOnClear && entry.url && typeof URL.revokeObjectURL === 'function') {
+        try { URL.revokeObjectURL(entry.url); } catch (_) {}
+      }
+    }
+    wallpaperThumbCache.clear();
+  }
+
+  function drawMediaCoverBlobUrl(mediaEl, srcW, srcH) {
+    return new Promise((resolve) => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 240;
+        canvas.height = 135;
+        const ctx = canvas.getContext && canvas.getContext('2d');
+        if (!ctx || typeof canvas.toBlob !== 'function') {
+          resolve(null);
+          return;
+        }
+        const w = Math.max(1, srcW || 240);
+        const h = Math.max(1, srcH || 135);
+        const scale = Math.max(canvas.width / w, canvas.height / h);
+        const dw = w * scale;
+        const dh = h * scale;
+        const dx = (canvas.width - dw) / 2;
+        const dy = (canvas.height - dh) / 2;
+        ctx.drawImage(mediaEl, dx, dy, dw, dh);
+        canvas.toBlob((blob) => {
+          if (!blob || blob.size < 32) {
+            resolve(null);
+            return;
+          }
+          try {
+            resolve(URL.createObjectURL(blob));
+          } catch (_) {
+            resolve(null);
+          }
+        }, 'image/jpeg', 0.85);
+      } catch (_) {
+        resolve(null);
+      }
+    });
+  }
+
+  async function buildWallpaperThumb(fileName) {
+    const fullCached = wallpaperBlobCache.get(fileName);
+    let tempUrl = fullCached ? fullCached.url : '';
+    let mime = fullCached ? fullCached.mime : '';
+    let ownsTempUrl = false;
+
+    if (!tempUrl) {
+      if (!window.antigravityTokenBridge || typeof window.antigravityTokenBridge.readWallpaper !== 'function') {
+        return null;
+      }
+      const payload = await window.antigravityTokenBridge.readWallpaper(fileName);
+      if (!payload || !payload.bytes) return null;
+      mime = payload.mime || 'image/png';
+      const blob = new Blob([payload.bytes], { type: mime });
+      tempUrl = URL.createObjectURL(blob);
+      ownsTempUrl = true;
+    }
+
+    const isVideo = (typeof mime === 'string' && mime.startsWith('video/')) || /\.(mp4|webm)$/i.test(fileName);
+    const probeCanvas = document.createElement('canvas');
+    const hasCanvasCtx = Boolean(probeCanvas && probeCanvas.getContext && probeCanvas.getContext('2d') && typeof probeCanvas.toBlob === 'function');
+    if (!hasCanvasCtx) {
+      const entry = { url: tempUrl, kind: isVideo ? 'video' : 'img', isVideo, revokeOnClear: ownsTempUrl };
+      wallpaperThumbCache.set(fileName, entry);
+      return entry;
+    }
+
+    try {
+      let thumbBlobUrl = null;
+      if (isVideo) {
+        thumbBlobUrl = await new Promise((resolve) => {
+          const vid = document.createElement('video');
+          let done = false;
+          const finish = (res) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            try { vid.removeAttribute('src'); vid.load && vid.load(); } catch (_) {}
+            resolve(res);
+          };
+          const capture = async () => {
+            if (done) return;
+            const res = (vid.videoWidth > 0 && vid.videoHeight > 0)
+              ? await drawMediaCoverBlobUrl(vid, vid.videoWidth, vid.videoHeight)
+              : null;
+            finish(res);
+          };
+          const timer = setTimeout(() => { capture(); }, 4500);
+          vid.muted = true;
+          vid.playsInline = true;
+          vid.preload = 'auto';
+          vid.onloadeddata = () => {
+            try {
+              if (vid.duration && isFinite(vid.duration) && vid.duration > 0.35 && vid.currentTime < 0.05) {
+                vid.onseeked = () => { capture(); };
+                vid.currentTime = Math.min(0.25, vid.duration * 0.1);
+                return;
+              }
+              capture();
+            } catch (_) {
+              finish(null);
+            }
+          };
+          vid.onerror = () => finish(null);
+          vid.src = tempUrl;
+        });
+      } else {
+        thumbBlobUrl = await new Promise((resolve) => {
+          const img = new Image();
+          let done = false;
+          const finish = (res) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            resolve(res);
+          };
+          const timer = setTimeout(() => finish(null), 4500);
+          img.onload = async () => {
+            try {
+              if (typeof img.decode === 'function') {
+                try { await img.decode(); } catch (_) {}
+              }
+              const res = await drawMediaCoverBlobUrl(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+              finish(res);
+            } catch (_) {
+              finish(null);
+            }
+          };
+          img.onerror = () => finish(null);
+          img.src = tempUrl;
+        });
+      }
+
+      if (thumbBlobUrl) {
+        if (ownsTempUrl && typeof URL.revokeObjectURL === 'function') {
+          try { URL.revokeObjectURL(tempUrl); } catch (_) {}
+        }
+        const entry = { url: thumbBlobUrl, kind: 'img', isVideo, revokeOnClear: true };
+        wallpaperThumbCache.set(fileName, entry);
+        return entry;
+      }
+      const fallbackEntry = { url: tempUrl, kind: isVideo ? 'video' : 'img', isVideo, revokeOnClear: ownsTempUrl };
+      wallpaperThumbCache.set(fileName, fallbackEntry);
+      return fallbackEntry;
+    } catch (_) {
+      if (ownsTempUrl && typeof URL.revokeObjectURL === 'function') {
+        try { URL.revokeObjectURL(tempUrl); } catch (_) {}
+      }
+      return null;
+    }
+  }
+
+  function ensureWallpaperThumb(fileName) {
+    if (!fileName) return Promise.resolve(null);
+    if (wallpaperThumbCache.has(fileName)) return Promise.resolve(wallpaperThumbCache.get(fileName));
+    if (wallpaperThumbInflight.has(fileName)) return wallpaperThumbInflight.get(fileName);
+    const p = buildWallpaperThumb(fileName).finally(() => {
+      wallpaperThumbInflight.delete(fileName);
+    });
+    wallpaperThumbInflight.set(fileName, p);
+    return p;
+  }
+
+  function applyThumbToCard(cardEl, entry, fileName) {
+    if (!cardEl || !entry || !entry.url) return;
+    if (cardEl.querySelector && cardEl.querySelector('.agy-wp-thumb-img')) return;
+    const oldFallback = cardEl.querySelector && cardEl.querySelector('.agy-wp-thumb-fallback');
+    const mediaStyle = 'position:absolute;inset:0;width:100%;height:100%;max-width:none;max-height:none;object-fit:cover;display:block;z-index:1;opacity:1;pointer-events:none;';
+    if (entry.kind === 'video') {
+      const vid = document.createElement('video');
+      vid.className = 'agy-wp-thumb-img';
+      vid.style.cssText = mediaStyle;
+      vid.muted = true;
+      vid.playsInline = true;
+      vid.preload = 'metadata';
+      vid.onloadeddata = () => {
+        if (oldFallback && oldFallback.parentElement) oldFallback.parentElement.removeChild(oldFallback);
+      };
+      vid.onerror = () => {
+        if (vid.parentElement) vid.parentElement.removeChild(vid);
+        if (fileName) wallpaperThumbCache.delete(fileName);
+      };
+      vid.src = `${entry.url}#t=0.2`;
+      cardEl.insertBefore(vid, cardEl.firstChild || null);
+      return;
+    }
+    const img = document.createElement('img');
+    img.className = 'agy-wp-thumb-img';
+    img.style.cssText = mediaStyle;
+    img.alt = '';
+    img.draggable = false;
+    img.onload = () => {
+      if (oldFallback && oldFallback.parentElement) oldFallback.parentElement.removeChild(oldFallback);
+    };
+    img.onerror = () => {
+      if (img.parentElement) img.parentElement.removeChild(img);
+      if (fileName) wallpaperThumbCache.delete(fileName);
+    };
+    img.src = entry.url;
+    cardEl.insertBefore(img, cardEl.firstChild || null);
+  }
+
   function updateWallpaperCtrlLabel(fileName) {
     const ctrl = document.getElementById('antigravity-wallpaper-ctrl');
     if (ctrl && wallpaperFiles.length > 0) {
       const inChat = Boolean(getConversationIdFromLocation());
       const curFile = fileName || wallpaperFiles[wallpaperIndex] || '';
       const isPinnedHere = Boolean(curFile && ((inChat && fxPrefs.chatWpFile === curFile) || (!inChat && fxPrefs.homeWpFile === curFile)));
-      const pauseTag = isPinnedHere ? ' 📌' : (fxPrefs.autoRotate ? '' : ' ⏸');
-      ctrl.textContent = `${wallpaperIndex + 1}/${wallpaperFiles.length}${pauseTag}`;
-      ctrl.title = `Обои: ${curFile}${isPinnedHere ? ' [Закреплено]' : ''} (ЛКМ: сменить · Наведение/ПКМ: настройки)`;
+      const iconHtml = isPinnedHere
+        ? agyIcon('pin', 12)
+        : (fxPrefs.autoRotate ? '' : agyIcon('pause', 12));
+      if (ctrl.dataset) {
+        ctrl.dataset.pinned = isPinnedHere ? '1' : '0';
+        ctrl.dataset.paused = (!isPinnedHere && !fxPrefs.autoRotate) ? '1' : '0';
+      }
+      ctrl.innerHTML = `<span>${wallpaperIndex + 1}/${wallpaperFiles.length}</span>${iconHtml}`;
+      ctrl.title = isPinnedHere
+        ? `Обои: ${curFile} [Закреплено] (ЛКМ: меню сцен и FX)`
+        : `Обои: ${curFile} (ЛКМ: меню сцен и FX · ПКМ: следующая сцена)`;
     }
     const menu = document.getElementById('antigravity-wallpaper-menu');
     if (menu && menu.style && menu.style.display !== 'none') {
@@ -3345,7 +4820,7 @@
     }
   }
 
-  function closeWallpaperMenu() {
+  function closeWallpaperMenu(restoreFocus) {
     wpMenuPinned = false;
     if (wpMenuCloseTimer) {
       clearTimeout(wpMenuCloseTimer);
@@ -3355,15 +4830,13 @@
     if (menu && menu.style) {
       menu.style.display = 'none';
     }
-  }
-
-  function scheduleCloseWallpaperMenu() {
-    if (wpMenuPinned) return;
-    if (wpMenuCloseTimer) clearTimeout(wpMenuCloseTimer);
-    wpMenuCloseTimer = setTimeout(() => {
-      wpMenuCloseTimer = 0;
-      if (!wpMenuPinned) closeWallpaperMenu();
-    }, 260);
+    const ctrl = document.getElementById('antigravity-wallpaper-ctrl');
+    if (ctrl) {
+      ctrl.setAttribute('aria-expanded', 'false');
+      if (restoreFocus && typeof ctrl.focus === 'function') {
+        try { ctrl.focus(); } catch (_) {}
+      }
+    }
   }
 
   function installWallpaperMenuDismissListeners() {
@@ -3373,15 +4846,17 @@
         const menu = document.getElementById('antigravity-wallpaper-menu');
         if (menu && menu.style && menu.style.display !== 'none') {
           const ctrl = document.getElementById('antigravity-wallpaper-ctrl');
-          if (!t || ((!menu.contains || !menu.contains(t)) && (!ctrl || !ctrl.contains || !ctrl.contains(t)))) {
-            closeWallpaperMenu();
+          const insideMenu = Boolean(t && menu.contains && menu.contains(t));
+          const insideCtrl = Boolean(t && ctrl && ctrl.contains && ctrl.contains(t));
+          if (!t || (!insideMenu && !insideCtrl)) {
+            closeWallpaperMenu(false);
           }
         }
         const pop = document.getElementById('antigravity-token-popover');
         if (pop && pop.style && pop.style.display !== 'none') {
           const pill = document.getElementById('antigravity-token-pill');
           if (!t || ((!pop.contains || !pop.contains(t)) && (!pill || !pill.contains || !pill.contains(t)))) {
-            closeTokenPopover();
+            closeTokenPopover(false);
           }
         }
       };
@@ -3390,8 +4865,13 @@
     if (!window.__antigravity_menu_keydown) {
       window.__antigravity_menu_keydown = (e) => {
         if (e && e.key === 'Escape') {
-          closeWallpaperMenu();
-          closeTokenPopover();
+          const active = document.activeElement;
+          const menu = document.getElementById('antigravity-wallpaper-menu');
+          const pop = document.getElementById('antigravity-token-popover');
+          const restoreWp = Boolean(menu && active && menu.contains && menu.contains(active));
+          const restorePop = Boolean(pop && active && pop.contains && pop.contains(active));
+          closeWallpaperMenu(restoreWp);
+          closeTokenPopover(restorePop);
           closeSwarmModal();
         }
       };
@@ -3405,23 +4885,27 @@
 
     const currentFile = wallpaperFiles[wallpaperIndex] || '';
     const inChat = Boolean(getConversationIdFromLocation());
+    const activePinFile = inChat ? fxPrefs.chatWpFile : fxPrefs.homeWpFile;
+    const isLockedHere = Boolean(activePinFile && wallpaperFiles.includes(activePinFile));
 
     // Header row: Обои count + Refresh + Auto-rotate toggle
     const hdr = document.createElement('div');
     hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:8px;';
     const title = document.createElement('span');
-    title.style.cssText = 'font-weight:600;color:#f8f0e8;font-size:11.5px;flex:1;';
-    title.textContent = `Сцена (${wallpaperFiles.length > 0 ? wallpaperIndex + 1 : 0}/${wallpaperFiles.length})`;
+    title.style.cssText = 'display:inline-flex;align-items:center;gap:5px;font-weight:700;color:var(--agy-text-primary, #f8f0e8);font-size:12.5px;flex:1;';
+    title.innerHTML = `<span>Обои (${wallpaperFiles.length > 0 ? wallpaperIndex + 1 : 0}/${wallpaperFiles.length})</span>${isLockedHere ? agyIcon('pin', 12) : ''}`;
     hdr.appendChild(title);
 
     const refreshBtn = document.createElement('button');
     refreshBtn.type = 'button';
     refreshBtn.className = 'agy-wp-menu-chip';
-    refreshBtn.style.padding = '1px 6px';
-    refreshBtn.textContent = '↻';
+    refreshBtn.style.padding = '3px 7px';
+    refreshBtn.innerHTML = agyIcon('refresh', 13);
+    refreshBtn.setAttribute('aria-label', 'Обновить список обоев из папки');
     refreshBtn.title = 'Обновить список обоев из папки';
     refreshBtn.onclick = async (e) => {
       e.stopPropagation();
+      clearWallpaperThumbCache();
       await refreshWallpaperList(true);
       updateWallpaperCtrlLabel();
       renderWallpaperMenu(menu);
@@ -3432,7 +4916,8 @@
     autoBtn.type = 'button';
     autoBtn.className = `agy-wp-menu-pill ${fxPrefs.autoRotate ? 'is-on' : 'is-off'}`;
     autoBtn.style.cursor = 'pointer';
-    autoBtn.textContent = fxPrefs.autoRotate ? 'Авто: ВКЛ' : 'Авто: ПАУЗА';
+    autoBtn.setAttribute('aria-pressed', fxPrefs.autoRotate ? 'true' : 'false');
+    autoBtn.innerHTML = `${agyIcon(fxPrefs.autoRotate ? 'play' : 'pause', 11)}<span>${fxPrefs.autoRotate ? 'Авто: ВКЛ' : 'Авто: ПАУЗА'}</span>`;
     autoBtn.onclick = (e) => {
       e.stopPropagation();
       fxPrefs.autoRotate = !fxPrefs.autoRotate;
@@ -3443,108 +4928,254 @@
     hdr.appendChild(autoBtn);
     menu.appendChild(hdr);
 
-    // Wallpaper selector chips + Pin for Home / Chat
-    if (wallpaperFiles.length > 0) {
-      const chipsWrap = document.createElement('div');
-      chipsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.08);';
-      for (let i = 0; i < wallpaperFiles.length; i++) {
-        const fname = wallpaperFiles[i];
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = `agy-wp-menu-chip${i === wallpaperIndex ? ' is-active' : ''}`;
-        const isHomePin = fxPrefs.homeWpFile === fname;
-        const isChatPin = fxPrefs.chatWpFile === fname;
-        const pinBadge = (isHomePin || isChatPin)
-          ? ` ${isHomePin ? 'H' : ''}${isChatPin ? 'C' : ''}`
-          : '';
-        chip.textContent = `${i + 1}${pinBadge}`;
-        chip.title = fname + (isHomePin ? ' [Закреплено: Home]' : '') + (isChatPin ? ' [Закреплено: Чат]' : '');
-        chip.onclick = async (e) => {
-          e.stopPropagation();
-          if (inChat && fxPrefs.chatWpFile && fxPrefs.chatWpFile !== fname) {
-            fxPrefs.chatWpFile = '';
-            saveFxPrefs();
-          } else if (!inChat && fxPrefs.homeWpFile && fxPrefs.homeWpFile !== fname) {
-            fxPrefs.homeWpFile = '';
-            saveFxPrefs();
-          }
-          await showWallpaperAt(i);
+    // 2-Tab switcher: Сцены | Вид и FX
+    const tabsRow = document.createElement('div');
+    tabsRow.className = 'agy-wp-tabs';
+    tabsRow.setAttribute('role', 'tablist');
+    tabsRow.setAttribute('aria-label', 'Разделы настроек фона');
+
+    const tabDefs = [
+      { id: 'scenes', label: 'Сцены' },
+      { id: 'fx', label: 'Вид и FX' }
+    ];
+    for (const td of tabDefs) {
+      const tb = document.createElement('button');
+      tb.type = 'button';
+      tb.setAttribute('role', 'tab');
+      tb.setAttribute('data-wp-tab', td.id);
+      const active = wpMenuActiveTab === td.id;
+      tb.setAttribute('aria-selected', active ? 'true' : 'false');
+      tb.className = `agy-wp-menu-chip${active ? ' is-active' : ''}`;
+      tb.style.flex = '1';
+      tb.textContent = td.label;
+      tb.onclick = (e) => {
+        e.stopPropagation();
+        if (wpMenuActiveTab !== td.id) {
+          wpMenuActiveTab = td.id;
           renderWallpaperMenu(menu);
+        }
+      };
+      tabsRow.appendChild(tb);
+    }
+    menu.appendChild(tabsRow);
+
+    if (wpMenuActiveTab === 'scenes') {
+      // Wallpaper thumbnail grid + Pin for Home / Chat
+      if (wallpaperFiles.length > 0) {
+        const grid = document.createElement('div');
+        grid.className = 'agy-wp-thumb-grid';
+        const pendingThumbs = [];
+
+        for (let i = 0; i < wallpaperFiles.length; i++) {
+          const fname = wallpaperFiles[i];
+          const isVid = /\.(mp4|webm)$/i.test(fname);
+          const isHomePin = fxPrefs.homeWpFile === fname;
+          const isChatPin = fxPrefs.chatWpFile === fname;
+          const tileLocked = isLockedHere && fname !== activePinFile;
+
+          const tile = document.createElement('button');
+          tile.type = 'button';
+          tile.className = `agy-wp-thumb-btn${i === wallpaperIndex ? ' is-active' : ''}${tileLocked ? ' is-locked' : ''}`;
+          tile.setAttribute('data-wp-file', fname);
+
+          const fb = document.createElement('span');
+          fb.className = 'agy-wp-thumb-fallback';
+          fb.innerHTML = isVid ? `<span>${i + 1}</span>${agyIcon('play', 10)}` : `${i + 1}`;
+          tile.appendChild(fb);
+
+          const cachedThumb = wallpaperThumbCache.get(fname);
+          if (cachedThumb && cachedThumb.url) {
+            applyThumbToCard(tile, cachedThumb, fname);
+          } else {
+            pendingThumbs.push({ fname, tile });
+          }
+
+          const idxBadge = document.createElement('span');
+          idxBadge.className = 'agy-wp-thumb-idx';
+          idxBadge.innerHTML = isVid ? `<span>${i + 1}</span>` : `${i + 1}`;
+          tile.appendChild(idxBadge);
+
+          if (isHomePin || isChatPin) {
+            const pinBadge = document.createElement('span');
+            pinBadge.className = 'agy-wp-thumb-pins';
+            pinBadge.textContent = `${isHomePin ? 'H' : ''}${isChatPin ? 'C' : ''}`;
+            tile.appendChild(pinBadge);
+          }
+
+          const sceneLabel = formatWallpaperSceneName(fname);
+          tile.title = `${i + 1}. ${sceneLabel} (${fname})`
+            + (isHomePin ? ' [Закреплено: Home]' : '')
+            + (isChatPin ? ' [Закреплено: Чат]' : '')
+            + (tileLocked ? ` — Заблокировано: нажмите «${inChat ? 'Чат' : 'Home'}» ниже, чтобы открепить` : '');
+          tile.setAttribute('aria-label', tile.title);
+
+          tile.onclick = async (e) => {
+            e.stopPropagation();
+            if (isWallpaperLockedHere(inChat)) {
+              if (fname !== activePinFile || wallpaperIndex !== i) {
+                triggerWallpaperLockHint(inChat);
+                renderWallpaperMenu(menu);
+              }
+              return;
+            }
+            await showWallpaperAt(i);
+            renderWallpaperMenu(menu);
+          };
+          grid.appendChild(tile);
+        }
+        menu.appendChild(grid);
+
+        if (pendingThumbs.length > 0) {
+          let cursor = 0;
+          const concurrency = Math.min(3, pendingThumbs.length);
+          for (let w = 0; w < concurrency; w++) {
+            (async () => {
+              while (cursor < pendingThumbs.length) {
+                const item = pendingThumbs[cursor++];
+                if (!item || !item.tile || item.tile.isConnected === false) continue;
+                const entry = await ensureWallpaperThumb(item.fname);
+                if (entry && entry.url && item.tile.isConnected !== false) {
+                  applyThumbToCard(item.tile, entry, item.fname);
+                }
+              }
+            })();
+          }
+        }
+
+        // Pin controls for current wallpaper
+        const pinRow = document.createElement('div');
+        pinRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;';
+        const pinLbl = document.createElement('span');
+        pinLbl.style.cssText = 'font-size:11.5px;color:var(--agy-text-muted, rgba(248,224,192,0.82));';
+        pinLbl.textContent = 'Закрепить текущие:';
+        pinRow.appendChild(pinLbl);
+
+        const pinBtns = document.createElement('div');
+        pinBtns.style.cssText = 'display:flex;gap:5px;';
+
+        const homePinActive = Boolean((currentFile && fxPrefs.homeWpFile === currentFile) || (!inChat && fxPrefs.homeWpFile));
+        const pinHomeBtn = document.createElement('button');
+        pinHomeBtn.type = 'button';
+        pinHomeBtn.className = `agy-wp-menu-chip${homePinActive ? ' is-active' : ''}${wpLockHintMsg && !inChat && homePinActive ? ' is-lock-pulse' : ''}`;
+        pinHomeBtn.setAttribute('data-pin-scope', 'home');
+        pinHomeBtn.setAttribute('aria-pressed', homePinActive ? 'true' : 'false');
+        pinHomeBtn.innerHTML = homePinActive ? `<span>Home</span>${agyIcon('pin', 12)}` : 'Home';
+        pinHomeBtn.title = fxPrefs.homeWpFile
+          ? `На главном экране: ${fxPrefs.homeWpFile} (нажмите, чтобы открепить)`
+          : 'Закрепить текущие обои для главного экрана';
+        pinHomeBtn.onclick = (e) => {
+          e.stopPropagation();
+          fxPrefs.homeWpFile = homePinActive ? '' : currentFile;
+          if (wpLockHintTimer) {
+            clearTimeout(wpLockHintTimer);
+            wpLockHintTimer = 0;
+          }
+          wpLockHintMsg = '';
+          saveFxPrefs();
+          updateWallpaperCtrlLabel(currentFile);
         };
-        chipsWrap.appendChild(chip);
+
+        const chatPinActive = Boolean((currentFile && fxPrefs.chatWpFile === currentFile) || (inChat && fxPrefs.chatWpFile));
+        const pinChatBtn = document.createElement('button');
+        pinChatBtn.type = 'button';
+        pinChatBtn.className = `agy-wp-menu-chip${chatPinActive ? ' is-active' : ''}${wpLockHintMsg && inChat && chatPinActive ? ' is-lock-pulse' : ''}`;
+        pinChatBtn.setAttribute('data-pin-scope', 'chat');
+        pinChatBtn.setAttribute('aria-pressed', chatPinActive ? 'true' : 'false');
+        pinChatBtn.innerHTML = chatPinActive ? `<span>Чат</span>${agyIcon('pin', 12)}` : 'Чат';
+        pinChatBtn.title = fxPrefs.chatWpFile
+          ? `В чатах: ${fxPrefs.chatWpFile} (нажмите, чтобы открепить)`
+          : 'Закрепить текущие обои для экранов чата';
+        pinChatBtn.onclick = (e) => {
+          e.stopPropagation();
+          fxPrefs.chatWpFile = chatPinActive ? '' : currentFile;
+          if (wpLockHintTimer) {
+            clearTimeout(wpLockHintTimer);
+            wpLockHintTimer = 0;
+          }
+          wpLockHintMsg = '';
+          saveFxPrefs();
+          updateWallpaperCtrlLabel(currentFile);
+        };
+
+        pinBtns.appendChild(pinHomeBtn);
+        pinBtns.appendChild(pinChatBtn);
+        pinRow.appendChild(pinBtns);
+        menu.appendChild(pinRow);
+
+        if (wpLockHintMsg) {
+          const lockNote = document.createElement('div');
+          lockNote.className = 'agy-wp-lock-note';
+          lockNote.style.marginTop = '4px';
+          lockNote.textContent = wpLockHintMsg;
+          menu.appendChild(lockNote);
+        }
       }
-      menu.appendChild(chipsWrap);
-
-      // Pin controls for current wallpaper
-      const pinRow = document.createElement('div');
-      pinRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:5px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.08);';
-      const pinLbl = document.createElement('span');
-      pinLbl.style.cssText = 'font-size:10.5px;color:rgba(243,244,246,0.72);';
-      pinLbl.textContent = 'Закрепить текущие:';
-      pinRow.appendChild(pinLbl);
-
-      const pinBtns = document.createElement('div');
-      pinBtns.style.cssText = 'display:flex;gap:4px;';
-
-      const homePinActive = Boolean(currentFile && fxPrefs.homeWpFile === currentFile);
-      const pinHomeBtn = document.createElement('button');
-      pinHomeBtn.type = 'button';
-      pinHomeBtn.className = `agy-wp-menu-chip${homePinActive ? ' is-active' : ''}`;
-      pinHomeBtn.textContent = 'Home';
-      pinHomeBtn.title = fxPrefs.homeWpFile
-        ? `На главном экране: ${fxPrefs.homeWpFile} (нажмите, чтобы переключить/снять)`
-        : 'Закрепить текущие обои для главного экрана';
-      pinHomeBtn.onclick = (e) => {
-        e.stopPropagation();
-        fxPrefs.homeWpFile = homePinActive ? '' : currentFile;
-        saveFxPrefs();
-        updateWallpaperCtrlLabel(currentFile);
-      };
-
-      const chatPinActive = Boolean(currentFile && fxPrefs.chatWpFile === currentFile);
-      const pinChatBtn = document.createElement('button');
-      pinChatBtn.type = 'button';
-      pinChatBtn.className = `agy-wp-menu-chip${chatPinActive ? ' is-active' : ''}`;
-      pinChatBtn.textContent = 'Чат';
-      pinChatBtn.title = fxPrefs.chatWpFile
-        ? `В чатах: ${fxPrefs.chatWpFile} (нажмите, чтобы переключить/снять)`
-        : 'Закрепить текущие обои для экранов чата';
-      pinChatBtn.onclick = (e) => {
-        e.stopPropagation();
-        fxPrefs.chatWpFile = chatPinActive ? '' : currentFile;
-        saveFxPrefs();
-        updateWallpaperCtrlLabel(currentFile);
-      };
-
-      pinBtns.appendChild(pinHomeBtn);
-      pinBtns.appendChild(pinChatBtn);
-      pinRow.appendChild(pinBtns);
-      menu.appendChild(pinRow);
+      return;
     }
 
-    // Scrim opacity slider
+    // Tab 2: Вид и FX
+    // Home greeting position & visibility
+    const greetRow = document.createElement('div');
+    greetRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:10px;padding-bottom:9px;border-bottom:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));';
+    const greetLbl = document.createElement('span');
+    greetLbl.style.cssText = 'font-size:11.5px;color:var(--agy-text-muted, rgba(248,224,192,0.82));';
+    greetLbl.textContent = 'Приветствие:';
+    greetRow.appendChild(greetLbl);
+
+    const greetBtns = document.createElement('div');
+    greetBtns.style.cssText = 'display:flex;gap:4px;';
+    const curGreetMode = normalizeGreetingMode(fxPrefs.greetingMode);
+    const greetOpts = [
+      { id: 'top', label: 'Выше' },
+      { id: 'center', label: 'Центр' },
+      { id: 'bottom', label: 'Ниже' },
+      { id: 'hidden', label: 'Скрыть' }
+    ];
+    for (const opt of greetOpts) {
+      const gBtn = document.createElement('button');
+      gBtn.type = 'button';
+      gBtn.className = `agy-wp-menu-chip${curGreetMode === opt.id ? ' is-active' : ''}`;
+      gBtn.setAttribute('data-greeting-mode', opt.id);
+      gBtn.setAttribute('aria-pressed', curGreetMode === opt.id ? 'true' : 'false');
+      gBtn.textContent = opt.label;
+      gBtn.onclick = (e) => {
+        e.stopPropagation();
+        fxPrefs.greetingMode = opt.id;
+        saveFxPrefs();
+        if (milkGreetingEl) applyGreetingModeClass(milkGreetingEl);
+        renderWallpaperMenu(menu);
+      };
+      greetBtns.appendChild(gBtn);
+    }
+    greetRow.appendChild(greetBtns);
+    menu.appendChild(greetRow);
+
+    // Scrim opacity slider (0..100%)
     const scrimVal = typeof fxPrefs.scrimOpacity === 'number' && !Number.isNaN(fxPrefs.scrimOpacity)
-      ? Math.max(0, Math.min(150, Math.round(fxPrefs.scrimOpacity)))
+      ? Math.max(0, Math.min(100, Math.round(fxPrefs.scrimOpacity)))
       : 100;
     const sliderWrap = document.createElement('div');
-    sliderWrap.style.cssText = 'margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.08);';
+    sliderWrap.style.cssText = 'margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));';
     const sliderHdr = document.createElement('div');
-    sliderHdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;font-size:11px;color:rgba(243,244,246,0.84);';
-    const sliderLbl = document.createElement('span');
+    sliderHdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;font-size:11.5px;color:var(--agy-text-secondary, rgba(243,244,246,0.88));';
+    const sliderLbl = document.createElement('label');
+    sliderLbl.setAttribute('for', 'agy-wp-scrim-slider');
     sliderLbl.textContent = 'Затемнение фона';
     const sliderNum = document.createElement('span');
-    sliderNum.style.cssText = 'font-weight:600;color:#f8f0e8;';
+    sliderNum.style.cssText = 'font-weight:700;color:var(--agy-text-primary, #f8f0e8);';
     sliderNum.textContent = `${scrimVal}%`;
     sliderHdr.appendChild(sliderLbl);
     sliderHdr.appendChild(sliderNum);
 
     const slider = document.createElement('input');
+    slider.id = 'agy-wp-scrim-slider';
     slider.type = 'range';
     slider.min = '0';
-    slider.max = '150';
+    slider.max = '100';
     slider.step = '5';
     slider.value = String(scrimVal);
     slider.className = 'agy-wp-slider';
+    slider.setAttribute('aria-label', 'Затемнение фона');
     slider.oninput = (e) => {
       e.stopPropagation();
       const v = Number(slider.value);
@@ -3572,10 +5203,11 @@
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'agy-wp-menu-toggle';
+      const isOn = Boolean(fxPrefs[item.key]);
+      row.setAttribute('aria-pressed', isOn ? 'true' : 'false');
       const lbl = document.createElement('span');
       lbl.textContent = item.label;
       const pill = document.createElement('span');
-      const isOn = Boolean(fxPrefs[item.key]);
       pill.className = `agy-wp-menu-pill ${isOn ? 'is-on' : 'is-off'}`;
       pill.textContent = isOn ? 'ON' : 'OFF';
       row.appendChild(lbl);
@@ -3594,12 +5226,12 @@
     // Open wallpapers folder button
     if (window.antigravityTokenBridge && typeof window.antigravityTokenBridge.openWallpapersDir === 'function') {
       const footer = document.createElement('div');
-      footer.style.cssText = 'margin-top:7px;padding-top:7px;border-top:1px solid rgba(255,255,255,0.08);display:flex;';
+      footer.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));display:flex;';
       const openDirBtn = document.createElement('button');
       openDirBtn.type = 'button';
       openDirBtn.className = 'agy-wp-menu-chip';
-      openDirBtn.style.cssText = 'width:100%;padding:4px 8px;display:flex;align-items:center;justify-content:center;gap:5px;';
-      openDirBtn.textContent = '📂 Открыть папку обоев';
+      openDirBtn.style.cssText = 'width:100%;padding:5px 8px;display:flex;align-items:center;justify-content:center;gap:6px;';
+      openDirBtn.innerHTML = `${agyIcon('folder', 13)}<span>Открыть папку обоев</span>`;
       openDirBtn.onclick = (e) => {
         e.stopPropagation();
         window.antigravityTokenBridge.openWallpapersDir().catch(() => {});
@@ -3621,15 +5253,8 @@
     if (!menu) {
       menu = document.createElement('div');
       menu.id = 'antigravity-wallpaper-menu';
-      menu.onmouseenter = () => {
-        if (wpMenuCloseTimer) {
-          clearTimeout(wpMenuCloseTimer);
-          wpMenuCloseTimer = 0;
-        }
-      };
-      menu.onmouseleave = () => {
-        scheduleCloseWallpaperMenu();
-      };
+      menu.setAttribute('role', 'dialog');
+      menu.setAttribute('aria-label', 'Настройки сцен и эффектов');
       menu.onclick = (e) => { if (e && e.stopPropagation) e.stopPropagation(); };
     }
     if (menu.parentElement !== stage) {
@@ -3637,6 +5262,8 @@
     }
     renderWallpaperMenu(menu);
     menu.style.display = 'block';
+    const ctrl = document.getElementById('antigravity-wallpaper-ctrl');
+    if (ctrl) ctrl.setAttribute('aria-expanded', 'true');
   }
 
   // Instant navigation listeners for SPA URL changes & New Conversation clicks
@@ -3695,6 +5322,14 @@
         ensureHomeWallpaper();
       }, 10);
     }
+    if (!target || !target.closest || !target.closest('#antigravity-wallpaper-layer, #antigravity-wallpaper-menu, #antigravity-corner-dock, #antigravity-token-stats-bar, #antigravity-swarm-modal')) {
+      const syncOv = () => {
+        const curBox = findInputBox();
+        ensureOverviewPanelTheme(curBox ? findMainStage(curBox) : null, curBox);
+      };
+      setTimeout(syncOv, 50);
+      setTimeout(syncOv, 220);
+    }
   };
   document.addEventListener('click', window.__antigravity_nav_click_handler, true);
 
@@ -3727,10 +5362,45 @@
     document.addEventListener('visibilitychange', window.__antigravity_visibility_handler);
     window.addEventListener('blur', window.__antigravity_blur_handler);
     window.addEventListener('focus', window.__antigravity_focus_handler);
-    window.__antigravity_stats_interval = setInterval(ensureTokenBar, 1000);
+    window.__antigravity_stats_interval = setInterval(() => {
+      ensureTokenBar();
+      const curBox = findInputBox();
+      ensureOverviewPanelTheme(curBox ? findMainStage(curBox) : null, curBox);
+    }, 1000);
     window.__antigravity_wallpaper_timer = setInterval(ensureHomeWallpaper, 3000);
+    if (typeof MutationObserver === 'function' && document.body) {
+      try {
+        const obs = new MutationObserver((mutations) => {
+          let added = false;
+          for (let i = 0; i < mutations.length; i++) {
+            const m = mutations[i];
+            if (m.addedNodes && m.addedNodes.length > 0) {
+              for (let j = 0; j < m.addedNodes.length; j++) {
+                const n = m.addedNodes[j];
+                if (n && n.nodeType === 1 && !isModOwnedNode(n)) {
+                  added = true;
+                  break;
+                }
+              }
+            }
+            if (added) break;
+          }
+          if (!added) return;
+          if (window.__antigravity_overview_debounce) clearTimeout(window.__antigravity_overview_debounce);
+          window.__antigravity_overview_debounce = setTimeout(() => {
+            window.__antigravity_overview_debounce = 0;
+            const curBox = findInputBox();
+            ensureOverviewPanelTheme(curBox ? findMainStage(curBox) : null, curBox);
+          }, 60);
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+        window.__antigravity_overview_observer = obs;
+      } catch (_) {}
+    }
     ensureTokenBar();
     ensureHomeWallpaper();
+    const initBox = findInputBox();
+    ensureOverviewPanelTheme(initBox ? findMainStage(initBox) : null, initBox);
   }
 
   if (document.readyState === 'loading') {

@@ -1,60 +1,77 @@
 <div align="center">
 
-<img src="./wallpapers/04_milk_balcony.png" alt="Antigravity Milk UI Mod — Balcony Wallpaper" width="100%" />
+<img src="./wallpapers/04_milk_balcony.png" alt="Antigravity Milk UI Mod — Balcony Hero Banner" width="100%" />
+
+<br />
 
 # 🩸 Antigravity Milk UI Mod
 
-**Атмосферная тема, движок живых обоев и real-time телеметрия токенов, скорости и роя субагентов для Google Antigravity IDE**
+**Obsidian-Crimson тема, движок живых обоев, real-time телеметрия токенов, инспектор контекста и карта роя субагентов для Google Antigravity IDE**
 
-![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-c6343c?style=for-the-badge)
-![Target](https://img.shields.io/badge/Antigravity-v2.32%2B%20%7C%20Electron%2044%2B-18181b?style=for-the-badge&labelColor=c6343c)
-![Models](https://img.shields.io/badge/Gemini-3.8%20Flash%20%7C%20Hydrogen%20%7C%20Argon%20%7C%20Carbon-8b222a?style=for-the-badge)
-![Wallpapers](https://img.shields.io/badge/Wallpapers-12%20Included%20(FHD)-18181b?style=for-the-badge&labelColor=8b222a)
+<p>
+  <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-0b0c13?style=for-the-badge&labelColor=c6343c" alt="Platform Windows 10/11" />
+  <img src="https://img.shields.io/badge/Antigravity-v2.32%20--%20v2.33%2B%20%7C%20Electron%2044%2B-c6343c?style=for-the-badge&labelColor=0b0c13" alt="Target Antigravity v2.33+" />
+  <img src="https://img.shields.io/badge/Gemini-3.8%20Flash%20%7C%20Hydrogen%20%7C%20Argon%20%7C%20Carbon-8b222a?style=for-the-badge&labelColor=0b0c13" alt="Supported Models" />
+  <img src="https://img.shields.io/badge/Wallpapers-12%20FHD%20(11%20PNG%20%2B%201%20MP4)-0b0c13?style=for-the-badge&labelColor=8b222a" alt="12 Wallpapers Included" />
+</p>
 
-[✨ Возможности](#-возможности) • [🖼 Галерея обоев](#-галерея-обоев) • [⚡ Быстрая установка](#-быстрая-установка) • [🤖 Инструкция для ИИ-агента](#-инструкция-для-ии-агента)
+<p>
+  <a href="#-что-нового">Что нового</a> •
+  <a href="#-возможности">Возможности</a> •
+  <a href="#-галерея-обоев">Галерея обоев</a> •
+  <a href="#-быстрая-установка">Быстрая установка</a> •
+  <a href="#-инструкция-и-спецификация-для-ии-агента">Для ИИ-агента</a>
+</p>
 
 </div>
 
 ---
 
-## ✨ Возможности
+## ✨ Что нового
 
-| 🎨 Визуал и движок обоев | 📊 Панель телеметрии и роя |
+> [!NOTE]
+> Актуальная версия полностью совместима с **Antigravity v2.33.0+** (`Electron 44.9+`) и переработана с фокусом на читаемость, доступность и чистый Obsidian-Crimson дизайн без лишнего визуального шума.
+
+- **Совместимость с Antigravity v2.33.0+:** загрузчик в `dist/utils.js` поддерживает `hubContents || win?.webContents`, а инъекция IPC в `dist/ipcHandlers.js` корректно встраивается до финального `return { ... }` внутри `registerIpcHandlers`.
+- **Полное оформление оболочки IDE:** единая палитра распространяется на левый сайдбар (цельная 1px рамка активного чата, очистка фона hover-кнопок), верхний тулбар, плавающую панель **Overview** справа (включая `.animate-overview-panel`, Shadow DOM и счётчики `Subagents` / `Background Tasks`), нативные оверлеи (`[role="tooltip"]`, `.monaco-hover`, `.quick-input-widget`, диалоги) и стандартные тонкие скроллбары (`scrollbar-width: thin`).
+- **2 пилюли в правом нижнем доке без hover-ловушки:** в углу экрана только **Рой** и счётчик сцен (`12/12`). Убрано случайное всплытие меню при наведении — **ЛКМ** (или `Enter` / `Пробел`) открывает 2-вкладочное меню (**`Сцены`** | **`Вид и FX`**), а **ПКМ** перелистывает на следующую сцену (или подсказывает, что сцена закреплена).
+- **Чистый экран Home и настройка приветствия:** на новом пустом экране убран шум из нулей — показывается компактный статус `Монитор: новый чат`, а заголовок приветствия оформлен в виде строгой VN/CRT-плашки с выбором позиции (`Выше` / `Центр` / `Ниже` / `Скрыть`).
+- **Доступность, производительность и векторная графика:** семантическая кнопка-индикатор контекста `<button>`, 2-строчный перенос задач на карточках графа роя, управление узлами с клавиатуры (`Enter` / стрелки / focus-trap + возврат фокуса по `Esc`), Pointer Events для панорамирования, поддержка `prefers-reduced-motion` (в CSS и Canvas/CRT/VHS FX), `tabular-nums`, векторные SVG-иконки вместо эмодзи и сохранение настроек в `%USERPROFILE%\.gemini\antigravity\fx_prefs.json`.
+
+---
+
+## 🎨 Возможности
+
+| 🎨 Визуал, обои и атмосфера | 📊 Панель телеметрии, инспектор и граф роя |
 |---|---|
-| **Фото и видео-обои** (`.png`, `.jpg`, `.webp`, `.gif`, `.mp4`, `.webm`) из `%USERPROFILE%\.gemini\antigravity\wallpapers` | **Метрики в реальном времени:** `turns`, `steps`, скорость `tok/s` (медиана + спарклайн) и активное время работы ИИ |
-| **Фиксированная красная палитра:** все рамки, свечение, частицы, скроллбары и выделения всегда в единой багрово-красной гамме независимо от обоев | **Контекст и кэш:** текущий контекст (`Input + Cache`), Cache Hit %, общий оборот токенов за сессию и `%` от окна `1M` |
-| **Раздельные пины и эффекты:** отдельные обои для `Home` и `Чат`, ручная или включаемая кнопкой авторотация (по умолчанию выключена), слайдер затемнения, 240 пиксельных частиц, параллакс камеры, спотлайт за курсором, CRT-сканлайны и VHS-переключение | **Стоимость API:** подробная разбивка `Input / Cache / Output` отдельно по основному чату и субагентам |
-| **Стеклянный UI + ровные таблицы:** карточки сообщений и инпута с пульсацией при генерации ИИ, плюс удержание широких Markdown-таблиц строго внутри рамки чата | **Инспектор контекста и карта роя:** топ инструментов, список прочитанных/изменённых файлов и интерактивное SVG-дерево субагентов `invoke_subagent` |
+| **12 встроенных Full HD сцен:** фото и видео-обои (`.png`, `.jpg`, `.webp`, `.gif`, `.mp4`, `.webm`) из `%USERPROFILE%\.gemini\antigravity\wallpapers` с кешем предпросмотра (`<img>` + `<video>`) | **Телеметрия в реальном времени:** `turns`, `steps`, скорость `tok/s` (медиана + спарклайн по шагам), активное время ИИ и табличное выравнивание цифр (`tabular-nums`) |
+| **Фиксированная палитра Milk Obsidian-Crimson:** все рамки, оверлеи, скроллбары, выделение текста и 240 пиксельных частиц выдержаны в единой багрово-кремовой гамме (`#c6343c` / `#f8e0c0`) | **Контекст и кэш:** текущий объём (`Input + Cache`), `Cache Hit %` за шаг и сессию, общий прогон токенов и кнопка-кольцо заполнения окна `1M` |
+| **Раздельные пины и нормализованный `0–100%` scrim:** независимое закрепление обоев для `Home` и `Чат` с хранением в `fx_prefs.json`, авторотация (выключена по умолчанию), плавный параллакс камеры, спотлайт, CRT-сканлайны и VHS-переключение | **Расчёт API + Инспектор контекста:** разбивка стоимости `Input / Cache / Output` по чату и субагентам, список частых инструментов и файлов с подсветкой повторных чтений |
+| **Чистые таблицы и диалоги:** карточки сообщений со сглаженным фоном и автоматическое удержание широких Markdown-таблиц и блоков кода строго внутри колонки чата (`constrainTablesInDialogBox`) | **Интерактивное SVG-дерево роя:** иерархия вызовов `invoke_subagent`, 2-строчные карточки с задачами и последним инструментом, резкий SVG-зум, Pointer Events перетаскивание и навигация с клавиатуры |
 
-> **Поддержка моделей:** в текущей сборке оставлены **Gemini 3.8 Flash**, **Gemini 4 Hydrogen**, **Gemini 4 Argon** и **Gemini 4 Carbon** (окно `1M`). Если вам нужны другие модели (Claude, GPT и т.д.), попросите ИИ-агента расширить `modelPattern` и `__resolveModelPricing` по секции ниже.
+> **Поддержка моделей:** в прайсинге и детекторе поддержаны **Gemini 3.8 Flash**, **Gemini 4 Hydrogen**, **Gemini 4 Argon** и **Gemini 4 Carbon** (контекстное окно `1M`, распознавание триггера выбора модели игнорирует прикреплённые файлы). При необходимости расширьте `modelPattern` и `__resolveModelPricing` по инструкции ниже.
 
 ---
 
 ## 🖼 Галерея обоев
 
-В комплекте уже лежат **12 обоев** (`11 × 1920×1080 PNG` + `1 × 1920×1080 MP4` с анимацией моргания) в папке [`wallpapers/`](./wallpapers) — свои можно докинуть туда же в любой момент (кнопка открытия папки встроена прямо в меню обоев справа внизу).
+В репозитории собраны **12 готовых Full HD сцен** (`11 × 1920×1080 PNG` + `1 × 1920×1080 MP4`), прошедших ремастеринг, 16:9 outpainting и апскейлинг **Real-ESRGAN x4plus-anime** (для сцен `02–10` и `12`). Свои изображения и видео можно докинуть в `%USERPROFILE%\.gemini\antigravity\wallpapers` кнопкой **Открыть папку обоев** во вкладке `Вид и FX`.
 
-<details>
-<summary><b>Показать встроенные обои (11 PNG + 1 MP4)</b></summary>
-<br />
-
-| `01_milk_room.png` | `02_milk_mirror_brush.png` | `03_milk_mirror_look.png` |
+| 01 · Комната (Pixel Art FHD) | 02 · У зеркала (Щётка) | 03 · Взгляд в зеркало |
 | :---: | :---: | :---: |
-| <img src="./wallpapers/01_milk_room.png" alt="01_milk_room" width="260" /> | <img src="./wallpapers/02_milk_mirror_brush.png" alt="02_milk_mirror_brush" width="260" /> | <img src="./wallpapers/03_milk_mirror_look.png" alt="03_milk_mirror_look" width="260" /> |
+| <img src="./wallpapers/01_milk_room.png" alt="01_milk_room" width="270" /><br /><sub>`01_milk_room.png`</sub> | <img src="./wallpapers/02_milk_mirror_brush.png" alt="02_milk_mirror_brush" width="270" /><br /><sub>`02_milk_mirror_brush.png`</sub> | <img src="./wallpapers/03_milk_mirror_look.png" alt="03_milk_mirror_look" width="270" /><br /><sub>`03_milk_mirror_look.png`</sub> |
 
-| `04_milk_balcony.png` | `05_milk_floor.png` | `06_milk_azs_fireflies.png` |
+| 04 · Балкон (Ночной город) | 05 · На полу | 06 · Заправка и светлячки |
 | :---: | :---: | :---: |
-| <img src="./wallpapers/04_milk_balcony.png" alt="04_milk_balcony" width="260" /> | <img src="./wallpapers/05_milk_floor.png" alt="05_milk_floor" width="260" /> | <img src="./wallpapers/06_milk_azs_fireflies.png" alt="06_milk_azs_fireflies" width="260" /> |
+| <img src="./wallpapers/04_milk_balcony.png" alt="04_milk_balcony" width="270" /><br /><sub>`04_milk_balcony.png`</sub> | <img src="./wallpapers/05_milk_floor.png" alt="05_milk_floor" width="270" /><br /><sub>`05_milk_floor.png`</sub> | <img src="./wallpapers/06_milk_azs_fireflies.png" alt="06_milk_azs_fireflies" width="270" /><br /><sub>`06_milk_azs_fireflies.png`</sub> |
 
-| `07_milk_chan_room.png` | `08_milk_fullbody_room.png` | `09_milk_sleepingbag.png` |
+| 07 · Комната (Крупный план) | 08 · Комната (В полный рост) | 09 · Спальник |
 | :---: | :---: | :---: |
-| <img src="./wallpapers/07_milk_chan_room.png" alt="07_milk_chan_room" width="260" /> | <img src="./wallpapers/08_milk_fullbody_room.png" alt="08_milk_fullbody_room" width="260" /> | <img src="./wallpapers/09_milk_sleepingbag.png" alt="09_milk_sleepingbag" width="260" /> |
+| <img src="./wallpapers/07_milk_chan_room.png" alt="07_milk_chan_room" width="270" /><br /><sub>`07_milk_chan_room.png`</sub> | <img src="./wallpapers/08_milk_fullbody_room.png" alt="08_milk_fullbody_room" width="270" /><br /><sub>`08_milk_fullbody_room.png`</sub> | <img src="./wallpapers/09_milk_sleepingbag.png" alt="09_milk_sleepingbag" width="270" /><br /><sub>`09_milk_sleepingbag.png`</sub> |
 
-| `10_milk_mosquito.png` | `11_milk_portrait_frame.png` | `12_milk_room_blink.mp4` |
+| 10 · Спираль (Mosquito) | 11 · Портретная рамка | 12 · Анимированная комната (MP4 Loop) |
 | :---: | :---: | :---: |
-| <img src="./wallpapers/10_milk_mosquito.png" alt="10_milk_mosquito" width="260" /> | <img src="./wallpapers/11_milk_portrait_frame.png" alt="11_milk_portrait_frame" width="260" /> | 🎬 **1920×1080 Full HD Loop** ([скачать / открыть](./wallpapers/12_milk_room_blink.mp4)) |
-
-</details>
+| <img src="./wallpapers/10_milk_mosquito.png" alt="10_milk_mosquito" width="270" /><br /><sub>`10_milk_mosquito.png`</sub> | <img src="./wallpapers/11_milk_portrait_frame.png" alt="11_milk_portrait_frame" width="270" /><br /><sub>`11_milk_portrait_frame.png`</sub> | <a href="./wallpapers/12_milk_room_blink.mp4"><img src="./wallpapers/01_milk_room.png" alt="12_milk_room_blink.mp4 preview" width="270" /></a><br /><sub>🎬 <a href="./wallpapers/12_milk_room_blink.mp4"><b>12_milk_room_blink.mp4</b></a> · 1920×1080 Loop</sub> |
 
 ---
 
@@ -62,8 +79,8 @@
 
 ### Требования
 - **Windows 10 / 11**
-- Установленный **Antigravity** в `%LOCALAPPDATA%\Programs\Antigravity`
-- **Node.js** (LTS, команды `node` и `npx` должны быть доступны в `PATH`)
+- Установленный **Antigravity** (протестировано вплоть до **v2.33.0**) в `%LOCALAPPDATA%\Programs\Antigravity`
+- **Node.js** (LTS, команды `node` и `npx` доступны в `PATH`)
 
 ### Установка в 2 шага
 1. Клонируйте репозиторий:
@@ -75,58 +92,68 @@
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\install.ps1
    ```
-   Скрипт разложит файлы в `%USERPROFILE%\.gemini\antigravity\{tools,wallpapers}`, положит `Apply_AG_UI_Mods.bat` на **Рабочий стол**, создаст резервную копию `app.asar.bak` и пропатчит `app.asar`.
+   Скрипт скопирует модули и обои в `%USERPROFILE%\.gemini\antigravity\{tools,wallpapers}`, поместит `Apply_AG_UI_Mods.bat` на **Рабочий стол**, создаст резервную копию `app.asar.bak` и пропатчит `app.asar`.
 
 ### Команды `Apply_AG_UI_Mods.bat`
 | Команда | Что делает |
 |---|---|
-| `Apply_AG_UI_Mods.bat` | Закрывает Antigravity, ставит/обновляет патч и запускает IDE |
-| `Apply_AG_UI_Mods.bat -Rebuild` | Принудительно пересобирает кэш `app.asar.patched` |
-| `Apply_AG_UI_Mods.bat -BuildOnly` | Собирает `app.asar.patched` без закрытия Antigravity |
+| `Apply_AG_UI_Mods.bat` | Закрывает Antigravity, ставит или быстро применяет кэш-патч и запускает IDE |
+| `Apply_AG_UI_Mods.bat -Rebuild` | Принудительно пересобирает кэш `app.asar.patched` (нужно после обновления Antigravity) |
+| `Apply_AG_UI_Mods.bat -BuildOnly` | Собирает `app.asar.patched` без закрытия и перезапуска работающего Antigravity |
 | `Apply_AG_UI_Mods.bat -Restore` | Полностью откатывает интерфейс к оригинальному `app.asar.bak` |
 
 ---
 
-## 🤖 Инструкция для ИИ-агента
+## 🤖 Инструкция и спецификация для ИИ-агента
 
-Если вы хотите, чтобы ваш ИИ-агент сам установил или адаптировал этот дизайн на чистом Antigravity, просто отправьте ему этот промпт:
+Если вы хотите, чтобы ваш ИИ-агент автоматически установил, обновил или адаптировал мод под новую версию Antigravity:
 
 ```text
-Изучи README.md из https://github.com/Aldiyuar/antigravity-milk-ui-mod и примени этот UI-мод (обои, тему и нижнюю панель телеметрии) к моему локальному Antigravity. Перед заменой app.asar проверь пути, прогони синтаксис-проверку node --check и сборку с -BuildOnly, после чего объясни мне, как перезапустить Antigravity для активации.
+Изучи README.md из https://github.com/Aldiyuar/antigravity-milk-ui-mod и примени этот UI-мод к моему локальному Antigravity. Перед заменой app.asar проверь пути, прогони синтаксис-проверку node --check для tools/antigravity_core_mod.js и тест сборки через -BuildOnly, после чего подскажи, как перезапустить Antigravity для активации.
 ```
 
 <details>
-<summary><b>Техническая спецификация для ИИ-агента (архитектура, точки патча и адаптация)</b></summary>
+<summary><b>Техническая спецификация: архитектура, точки патча (v2.33+) и адаптация</b></summary>
 
-### 1. Файлы проекта
-- `tools/antigravity_core_mod.js` — клиентский скрипт для renderer-окна Electron (DOM-наблюдение, панель токенов, поповер с инспектором контекста, SVG-карта роя, движок обоев/FX, CSS `#antigravity-milk-style`, удержание таблиц `constrainTablesInDialogBox`).
-- `tools/update_antigravity_mods.ps1` — распаковывает `%LOCALAPPDATA%\Programs\Antigravity\resources\app.asar` через `npx --yes @electron/asar`, идемпотентно патчит 3 файла в `dist/` с комментариями-маркерами `BEGIN`/`END`, проверяет синтаксис через `node`, пакует обратно с `--unpack "**/node_modules/chrome-devtools-mcp/**"` и сохраняет кэш `app.asar.patched` + `app.asar.patched.unpacked` + `.ver`.
-- `tools/restart_and_apply.ps1` — быстрая установка уже собранного `app.asar.patched` (и `.unpacked`) с перезапуском приложения.
-- `Apply_AG_UI_Mods.bat` — Windows-обёртка с UAC-элевацией, проверкой `node --check` и нормализацией флагов `-BuildOnly` / `-Rebuild` / `-Restore`.
-- `install.ps1` — копирует скрипты и обои в `%USERPROFILE%\.gemini\antigravity\` и `Apply_AG_UI_Mods.bat` на Рабочий стол.
+### 1. Схема взаимодействия модулей
 
-### 2. Точки интеграции внутри `app.asar`
-Если в будущей версии Antigravity структура `dist/` изменится, проверьте эти 3 патча:
+```mermaid
+flowchart LR
+  U["dist/utils.js\n(Electron Main)"] -->|executeJavaScript при did-finish-load| C["tools/antigravity_core_mod.js\n(Renderer UI + Theme + FX)"]
+  C <-->|contextBridge: antigravityTokenBridge| P["dist/preload.js"]
+  P <-->|ipcRenderer / ipcMain.handle| I["dist/ipcHandlers.js\n(Telemetry & Media IPC)"]
+  I -->|инкрементальный парсинг + subagents| T["brain/{convId}/.../transcript.jsonl"]
+  I -->|whitelist + basename guard| W["%USERPROFILE%/.gemini/antigravity/wallpapers/"]
+  I <-->|чтение / запись пинов и FX| F["%USERPROFILE%/.gemini/antigravity/fx_prefs.json"]
+```
 
-1. **`dist/utils.js`** (маркеры `// Antigravity Core Mod Loader BEGIN` ... `END`):
+### 2. Файлы проекта
+- `tools/antigravity_core_mod.js` — клиентский модуль для Electron Renderer: DOM-наблюдение, панель телеметрии (`#antigravity-token-stats-bar`), поповер «Монитор сессии» (Обзор + Инспектор), SVG-граф роя (`#antigravity-swarm-modal`), 2-пилюльный док (`#antigravity-corner-dock`), 2-вкладочное меню обоев (`#antigravity-wallpaper-menu`), движок сцен/FX, тема сайдбара/Overview/тултипов и защита ширины таблиц.
+- `tools/update_antigravity_mods.ps1` — распаковывает `app.asar` через `npx --yes @electron/asar`, идемпотентно патчит 3 файла в `dist/` с маркерами `BEGIN`/`END`, проверяет синтаксис через `node --check`, собирает кэш `app.asar.patched` + `app.asar.patched.unpacked` + `.ver`.
+- `tools/restart_and_apply.ps1` — быстрая установка собранного `app.asar.patched` и перезапуск IDE.
+- `Apply_AG_UI_Mods.bat` — Windows-обёртка с UAC-элевацией и пробросом `-BuildOnly` / `-Rebuild` / `-Restore`.
+- `install.ps1` — раскладывает скрипты, обои и ярлык установки.
+
+### 3. Точки интеграции внутри `app.asar` (`Antigravity v2.33.0+`)
+1. **`dist/utils.js`** (`// Antigravity Core Mod Loader BEGIN` ... `END`):
    - Вставляется сразу после `(0, loadingOverlay_1.attachLoadingOverlay)(win, foregroundColor, backgroundColor);`.
-   - Вешает `win.webContents.on('did-finish-load', ...)` и выполняет `fs.readFileSync(<homedir>/.gemini/antigravity/tools/antigravity_core_mod.js, 'utf8')` через `win.webContents.executeJavaScript(modCode)`.
-   - Изменения в `antigravity_core_mod.js` не требуют пересборки `app.asar` — достаточно перезагрузить окно.
-2. **`dist/preload.js`** (маркеры `// Antigravity Token Bridge BEGIN` ... `END`):
-   - Пробрасывает `window.antigravityTokenBridge` через `contextBridge.exposeInMainWorld` (используя `electron_1` с фоллбэком на `require('electron')`):
+   - Использует `const __agyTargetWc = (typeof hubContents !== 'undefined' && hubContents) ? hubContents : win?.webContents;` (совместимо с архитектурой `v2.33+`, где за окно чата отвечает `hubContents`).
+   - Читает `%USERPROFILE%\.gemini\antigravity\tools\antigravity_core_mod.js` с диска при каждом `did-finish-load` — изменения UI-скрипта применяются через обычный `Developer: Reload Window` без пересборки `app.asar`.
+2. **`dist/preload.js`** (`// Antigravity Token Bridge BEGIN` ... `END`):
+   - Пробрасывает `window.antigravityTokenBridge` через `contextBridge.exposeInMainWorld`:
      - `getStats(convId, modelName)` → `antigravity:get-token-stats`
      - `listWallpapers()` → `antigravity:list-wallpapers`
      - `readWallpaper(fileName)` → `antigravity:read-wallpaper`
      - `openWallpapersDir()` → `antigravity:open-wallpapers-dir`
-3. **`dist/ipcHandlers.js`** (маркеры `// Antigravity Token Stats IPC Handler BEGIN` ... `END`):
-   - Вставляется в конец функции `registerIpcHandlers` (перед последней `}` до `//# sourceMappingURL`).
-   - Инкрементально (по `byteOffset` и кэшу `__tokenStatsCache`) читает `%USERPROFILE%\.gemini\antigravity\brain\<convId>\.system_generated\logs\transcript.jsonl` и дочерние логи субагентов.
-   - При изменении формата транскрипта обновите `__applyTranscriptLines`.
+     - `getFxPrefs()` → `antigravity:get-fx-prefs`
+     - `setFxPrefs(prefs)` → `antigravity:set-fx-prefs`
+3. **`dist/ipcHandlers.js`** (`// Antigravity Token Stats IPC Handler BEGIN` ... `END`):
+   - Вставляется внутри `registerIpcHandlers` **перед финальным `return { ... }`** (иначе обработчики после `return` остаются недостижимыми в `v2.33.0+`).
+   - Инкрементально (по `byteOffset` + `__tokenStatsCache`) читает `transcript.jsonl` основного чата и дочерних субагентов, отслеживает `antigravity:get-fx-prefs` / `set-fx-prefs` и защищает чтение обоев/чатов от path traversal.
 
-### 3. Чеклист адаптации на чистой машине
-1. **Права администратора (опционально):** если пользователь не хочет запускать IDE от админа, уберите `-Verb RunAs` из `Apply_AG_UI_Mods.bat` и `update_antigravity_mods.ps1` (для записи в `%LOCALAPPDATA%` права админа не требуются, а отказ от `RunAs` сохранит drag-and-drop из Проводника).
-2. **Другие модели:** расширьте `modelPattern` в `getActiveModelName` (`tools/antigravity_core_mod.js`) и функции `__resolveModelLimit` / `__resolveModelPricing` (`tools/update_antigravity_mods.ps1`).
-3. **Безопасная проверка:** если агент работает внутри самого Antigravity, сначала выполните `install.ps1 -BuildOnly` (это не убьёт процесс IDE), проверьте сборку и попросите пользователя закрыть Antigravity и запустить `Apply_AG_UI_Mods.bat`.
-4. **Откат:** `Apply_AG_UI_Mods.bat -Restore` восстанавливает `app.asar.bak`.
+### 4. Чеклист адаптации
+- **Права администратора:** при желании запускать IDE без прав админа уберите `-Verb RunAs` из `Apply_AG_UI_Mods.bat` и `update_antigravity_mods.ps1` (`%LOCALAPPDATA%` доступен на запись текущему пользователю).
+- **Новые модели:** добавьте паттерн в `modelPattern` (`tools/antigravity_core_mod.js`) и ветки в `__resolveModelLimit` / `__resolveModelPricing` (`tools/update_antigravity_mods.ps1`).
+- **Откат:** `Apply_AG_UI_Mods.bat -Restore` восстанавливает стоковый `app.asar.bak`.
 
 </details>

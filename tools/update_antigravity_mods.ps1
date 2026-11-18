@@ -211,18 +211,21 @@ if ($useFastInstall) {
 
     $hookCode = @'
     // Antigravity Core Mod Loader BEGIN
-    win.webContents.on('did-finish-load', () => {
-        try {
-            const fs_core = require('fs');
-            const path_core = require('path');
-            const os_core = require('os');
-            const coreModPath = path_core.join(os_core.homedir(), '.gemini', 'antigravity', 'tools', 'antigravity_core_mod.js');
-            if (fs_core.existsSync(coreModPath)) {
-                const modCode = fs_core.readFileSync(coreModPath, 'utf8');
-                win.webContents.executeJavaScript(modCode).catch(() => {});
-            }
-        } catch (_) {}
-    });
+    try {
+        const __agyTargetWc = (typeof hubContents !== 'undefined' && hubContents) ? hubContents : win?.webContents;
+        __agyTargetWc?.on('did-finish-load', () => {
+            try {
+                const fs_core = require('fs');
+                const path_core = require('path');
+                const os_core = require('os');
+                const coreModPath = path_core.join(os_core.homedir(), '.gemini', 'antigravity', 'tools', 'antigravity_core_mod.js');
+                if (fs_core.existsSync(coreModPath)) {
+                    const modCode = fs_core.readFileSync(coreModPath, 'utf8');
+                    __agyTargetWc.executeJavaScript(modCode).catch(() => {});
+                }
+            } catch (_) {}
+        });
+    } catch (_) {}
     // Antigravity Core Mod Loader END
 '@
 
@@ -261,7 +264,9 @@ try {
     getStats: (convId, modelName) => __agyElectron.ipcRenderer.invoke('antigravity:get-token-stats', convId, modelName),
     listWallpapers: () => __agyElectron.ipcRenderer.invoke('antigravity:list-wallpapers'),
     readWallpaper: (fileName) => __agyElectron.ipcRenderer.invoke('antigravity:read-wallpaper', fileName),
-    openWallpapersDir: () => __agyElectron.ipcRenderer.invoke('antigravity:open-wallpapers-dir')
+    openWallpapersDir: () => __agyElectron.ipcRenderer.invoke('antigravity:open-wallpapers-dir'),
+    getFxPrefs: () => __agyElectron.ipcRenderer.invoke('antigravity:get-fx-prefs'),
+    setFxPrefs: (prefs) => __agyElectron.ipcRenderer.invoke('antigravity:set-fx-prefs', prefs)
   });
 } catch(e) { try { console.error('[antigravity-mod] token bridge failed:', e); } catch (_) {} }
 // Antigravity Token Bridge END
@@ -424,20 +429,42 @@ try {
             prevItemMeta: null,
             lastEventType: null,
             lastToolName: '',
+            lastToolTarget: '',
             lastActivityMs: 0,
+            firstUserTask: '',
+            lastUserTask: '',
             pendingPlanner: null,
             pendingSubagentCalls: 0,
             pendingSubagentRoles: [],
+            pendingSubagentTasks: [],
+            pendingSubagentTypes: [],
             pendingToolResponses: 0,
             childConvIds: [],
             childSubagentMeta: {},
             childSubagentModels: {},
+            childSubagentTasks: {},
+            childSubagentTypes: {},
             pendingSubagentModels: [],
             toolSummary: { reads: 0, edits: 0, cmds: 0, web: 0, mcp: 0, subagents: 0, other: 0, total: 0, chars: 0 },
             toolCounts: {},
             filesMap: {},
             speeds: []
         };
+    }
+
+    function __cleanTaskSummary(raw, maxLen = 220) {
+        if (!raw || typeof raw !== 'string') return '';
+        let s = raw
+            .replace(/<ADDITIONAL_METADATA>[\s\S]*$/i, '')
+            .replace(/<\/?(?:USER_REQUEST|SYSTEM_MESSAGE|CONTEXT_SUMMARY|summary)>/gi, ' ')
+            .replace(/\\r\\n|\\n|\\r/g, ' ')
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\')
+            .replace(/^["'\s]+|["'\s]+$/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (!s) return '';
+        return s.length > maxLen ? `${s.slice(0, maxLen - 1)}…` : s;
     }
 
     function __applyTranscriptLines(state, text) {
@@ -458,6 +485,13 @@ try {
                 state.turns++;
                 state.pendingSubagentCalls = 0;
                 state.pendingSubagentRoles = [];
+                state.pendingSubagentTasks = [];
+                state.pendingSubagentTypes = [];
+                const uTask = __cleanTaskSummary(typeof item.content === 'string' ? item.content : '', 220);
+                if (uTask) {
+                    if (!state.firstUserTask) state.firstUserTask = uTask;
+                    state.lastUserTask = uTask;
+                }
             }
 
             const t = item.created_at ? new Date(item.created_at).getTime() : null;
@@ -511,6 +545,8 @@ try {
                 state.plannerSteps++;
                 state.pendingSubagentCalls = 0;
                 state.pendingSubagentRoles = [];
+                state.pendingSubagentTasks = [];
+                state.pendingSubagentTypes = [];
                 state.pendingSubagentModels = [];
                 state.pendingToolResponses = 0;
                 if (!state.toolSummary) state.toolSummary = { reads: 0, edits: 0, cmds: 0, web: 0, mcp: 0, subagents: 0, other: 0, total: 0, chars: 0 };
@@ -535,6 +571,19 @@ try {
                             parsedArgs = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : (rawArgs || {});
                         } catch (_) {}
 
+                        const toolTargetFile = __extractToolFilePath(parsedArgs);
+                        const toolTargetHint = parsedArgs.toolSummary
+                            || (toolTargetFile ? (toolTargetFile.split(/[\\/]/).pop() || toolTargetFile) : '')
+                            || parsedArgs.query
+                            || parsedArgs.Query
+                            || parsedArgs.CommandLine
+                            || '';
+                        if (toolTargetHint) {
+                            state.lastToolTarget = __cleanTaskSummary(String(toolTargetHint), 68);
+                        } else {
+                            state.lastToolTarget = '';
+                        }
+
                         const lowerName = tName.toLowerCase();
                         const isRead = /^(read_file|view_file|view_file_outline|view_code_item|read_resource|list_dir|find_by_name|grep_search|search_files)$/.test(lowerName) || /read|view/.test(lowerName);
                         const isEdit = /^(edit_file|write_file|replace_file_content|multi_replace_file_content|write_to_file)$/.test(lowerName) || /edit|write|replace/.test(lowerName);
@@ -545,6 +594,11 @@ try {
                             const roleRaw = parsedArgs.Role || parsedArgs.TypeName || '';
                             const roleLabel = __cleanToolPath(String(roleRaw || 'Subagent')).replace(/^"+|"+$/g, '').trim();
                             state.pendingSubagentRoles.push((roleLabel || 'Subagent').slice(0, 48));
+                            if (!state.pendingSubagentTasks) state.pendingSubagentTasks = [];
+                            if (!state.pendingSubagentTypes) state.pendingSubagentTypes = [];
+                            const taskRaw = parsedArgs.Prompt || parsedArgs.Description || parsedArgs.Task || '';
+                            state.pendingSubagentTasks.push(__cleanTaskSummary(String(taskRaw || ''), 220));
+                            state.pendingSubagentTypes.push(__cleanTaskSummary(String(parsedArgs.TypeName || ''), 32));
                             if (!state.pendingSubagentModels) state.pendingSubagentModels = [];
                             let modelRaw = parsedArgs.Model || (String(parsedArgs.TypeName || '').toLowerCase() === 'browser' ? 'flash' : '');
                             // 'inherit' means "same model as the parent chat" -> keep empty so parent pricing is used
@@ -608,6 +662,7 @@ try {
                 }
                 if (!hasTools) {
                     state.lastToolName = 'Ответ модели';
+                    state.lastToolTarget = '';
                 }
             } else if (item.type === 'GENERIC') {
                 if (state.pendingToolResponses > 0 && typeof item.content === 'string') {
@@ -629,12 +684,24 @@ try {
                         const assignedRole = (state.pendingSubagentRoles && state.pendingSubagentRoles.length > 0)
                             ? state.pendingSubagentRoles.shift()
                             : 'Subagent';
+                        const assignedTask = (state.pendingSubagentTasks && state.pendingSubagentTasks.length > 0)
+                            ? state.pendingSubagentTasks.shift() : '';
+                        const assignedType = (state.pendingSubagentTypes && state.pendingSubagentTypes.length > 0)
+                            ? state.pendingSubagentTypes.shift() : '';
                         if (!state.childConvIds.includes(subId)) {
                             state.childConvIds.push(subId);
                         }
                         if (!state.childSubagentMeta) state.childSubagentMeta = {};
                         if (!state.childSubagentMeta[subId]) {
                             state.childSubagentMeta[subId] = assignedRole;
+                        }
+                        if (!state.childSubagentTasks) state.childSubagentTasks = {};
+                        if (assignedTask && !state.childSubagentTasks[subId]) {
+                            state.childSubagentTasks[subId] = assignedTask;
+                        }
+                        if (!state.childSubagentTypes) state.childSubagentTypes = {};
+                        if (assignedType && !state.childSubagentTypes[subId]) {
+                            state.childSubagentTypes[subId] = assignedType;
                         }
                         state.pendingSubagentCalls = Math.max(0, state.pendingSubagentCalls - 1);
                     }
@@ -855,6 +922,8 @@ try {
             const subagentsList = [];
             const roleMap = Object.assign({}, state.childSubagentMeta || {});
             const modelMap = Object.assign({}, state.childSubagentModels || {});
+            const taskMap = Object.assign({}, state.childSubagentTasks || {});
+            const typeMap = Object.assign({}, state.childSubagentTypes || {});
             const visited = new Set([convId]);
             const queue = (state.childConvIds || []).map((cid) => ({ id: cid, parentId: convId, depth: 1 }));
             const MAX_SUBAGENTS = 100;
@@ -889,6 +958,12 @@ try {
                 if (ss.childSubagentModels) {
                     Object.assign(modelMap, ss.childSubagentModels);
                 }
+                if (ss.childSubagentTasks) {
+                    Object.assign(taskMap, ss.childSubagentTasks);
+                }
+                if (ss.childSubagentTypes) {
+                    Object.assign(typeMap, ss.childSubagentTypes);
+                }
 
                 const subLastTs = Math.max(ss.lastActivityMs || 0, subCached.mtimeMs || 0);
                 const subAgeMs = nowMs - subLastTs;
@@ -903,6 +978,9 @@ try {
                     parentId,
                     depth,
                     role: roleMap[subId] || 'Subagent',
+                    agentType: typeMap[subId] || '',
+                    modelLabel: subPricing.label || '',
+                    task: taskMap[subId] || ss.firstUserTask || '',
                     steps: ss.steps || 0,
                     turns: ss.turns || 0,
                     tokens: __formatTokensCompact(subTok),
@@ -910,6 +988,8 @@ try {
                     cost: __formatUsd(subC.totalCost),
                     workTime: __formatDuration(subMs),
                     lastTool: ss.lastToolName || '',
+                    lastTarget: ss.lastToolTarget || '',
+                    filesCount: Object.keys(ss.filesMap || {}).length,
                     isActive: subIsActive
                 });
 
@@ -943,6 +1023,9 @@ try {
             const swarmRoot = {
                 id: convId,
                 role: 'Main Chat',
+                agentType: 'coordinator',
+                modelLabel: pricing.label || '',
+                task: state.lastUserTask || state.firstUserTask || '',
                 steps: state.steps || 0,
                 turns: state.turns || 0,
                 tokens: __formatTokensCompact(chatTotal),
@@ -950,6 +1033,8 @@ try {
                 cost: __formatUsd(chatCost.totalCost),
                 workTime: __formatDuration(chatWorkTimeMs),
                 lastTool: state.lastToolName || '',
+                lastTarget: state.lastToolTarget || '',
+                filesCount: Object.keys(state.filesMap || {}).length,
                 isActive: rootIsActive
             };
 
@@ -1108,6 +1193,40 @@ try {
             return false;
         }
     });
+
+    electron_1.ipcMain.handle('antigravity:get-fx-prefs', async () => {
+        try {
+            const nodeFs = require('fs');
+            const nodePath = require('path');
+            const nodeOs = require('os');
+            const prefsPath = nodePath.join(nodeOs.homedir(), '.gemini', 'antigravity', 'fx_prefs.json');
+            const raw = await nodeFs.promises.readFile(prefsPath, 'utf8');
+            const parsed = JSON.parse(raw);
+            return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+        } catch (_) {
+            return null;
+        }
+    });
+
+    electron_1.ipcMain.handle('antigravity:set-fx-prefs', async (_event, nextPrefs) => {
+        try {
+            if (!nextPrefs || typeof nextPrefs !== 'object' || Array.isArray(nextPrefs)) {
+                return false;
+            }
+            const nodeFs = require('fs');
+            const nodePath = require('path');
+            const nodeOs = require('os');
+            const baseDir = nodePath.join(nodeOs.homedir(), '.gemini', 'antigravity');
+            await nodeFs.promises.mkdir(baseDir, { recursive: true });
+            const prefsPath = nodePath.join(baseDir, 'fx_prefs.json');
+            const serialized = JSON.stringify(nextPrefs, null, 2);
+            if (serialized.length > 16384) return false;
+            await nodeFs.promises.writeFile(prefsPath, serialized, 'utf8');
+            return true;
+        } catch (_) {
+            return false;
+        }
+    });
     // Antigravity Token Stats IPC Handler END
 '@
 
@@ -1124,15 +1243,30 @@ try {
         $cleanBefore = $ipcContent.Substring(0, $idx).TrimEnd()
         $ipcContent = $cleanBefore + "`n`n    " + $ipcHandlerCode.Trim() + "`n}`n"
     } else {
-        # Insert before the closing brace of registerIpcHandlers, ignoring a trailing sourceMappingURL comment and keeping any tail intact
+        # Insert before any top-level trailing return / closing brace of registerIpcHandlers (ignoring trailing sourceMappingURL)
         $srcMapIdx = $ipcContent.LastIndexOf('//# sourceMappingURL')
         $searchLimit = if ($srcMapIdx -ge 0) { $srcMapIdx } else { $ipcContent.Length }
         $lastIdx = $ipcContent.Substring(0, $searchLimit).LastIndexOf('}')
         if ($lastIdx -eq -1) {
             throw "Не найдена закрывающая скобка функции в ipcHandlers.js"
         }
-        $cleanBefore = $ipcContent.Substring(0, $lastIdx).TrimEnd()
-        $ipcContent = $cleanBefore + "`n`n    " + $ipcHandlerCode.Trim() + "`n" + $ipcContent.Substring($lastIdx)
+        $insertIdx = $lastIdx
+        $beforeClose = $ipcContent.Substring(0, $lastIdx)
+        $retMatches = [regex]::Matches($beforeClose, '(?m)^[ \t]*return\b')
+        for ($ri = $retMatches.Count - 1; $ri -ge 0; $ri--) {
+            $afterRet = $beforeClose.Substring($retMatches[$ri].Index)
+            $depth = 0; $balanced = $true
+            foreach ($ch in $afterRet.ToCharArray()) {
+                if ($ch -eq '{') { $depth++ }
+                elseif ($ch -eq '}') { $depth--; if ($depth -lt 0) { $balanced = $false; break } }
+            }
+            if ($balanced -and $depth -eq 0) {
+                $insertIdx = $retMatches[$ri].Index
+                break
+            }
+        }
+        $cleanBefore = $ipcContent.Substring(0, $insertIdx).TrimEnd()
+        $ipcContent = $cleanBefore + "`n`n    " + $ipcHandlerCode.Trim() + "`n    " + $ipcContent.Substring($insertIdx).TrimStart()
     }
     $ipcContent = $ipcContent.TrimEnd() + "`n"  # drop accumulated trailing blank lines
     Write-Utf8NoBom -Path $ipcPath -Value $ipcContent
