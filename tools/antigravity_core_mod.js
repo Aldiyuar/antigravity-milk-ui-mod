@@ -46,6 +46,24 @@
       if (window.__antigravity_orig_replaceState) {
         window.history.replaceState = window.__antigravity_orig_replaceState;
       }
+      if (window.__antigravity_sidebar_hover_el && window.__antigravity_sidebar_hover_fn) {
+        try {
+          window.__antigravity_sidebar_hover_el.removeEventListener('mouseover', window.__antigravity_sidebar_hover_fn, { passive: true });
+          if (window.__antigravity_sidebar_hover_el.dataset) {
+            delete window.__antigravity_sidebar_hover_el.dataset.agyHoverWired;
+          }
+        } catch (_) {}
+        window.__antigravity_sidebar_hover_el = null;
+        window.__antigravity_sidebar_hover_fn = null;
+      }
+      const oldMilkStyle = document.getElementById('antigravity-milk-style');
+      if (oldMilkStyle) oldMilkStyle.remove();
+      const oldChatFrame = document.getElementById('agy-milk-chat-frame');
+      if (oldChatFrame) oldChatFrame.remove();
+      const oldWpLayer = document.getElementById('antigravity-wallpaper-layer');
+      if (oldWpLayer) oldWpLayer.remove();
+      const oldStatsBar = document.getElementById('antigravity-token-stats-bar');
+      if (oldStatsBar) oldStatsBar.remove();
       const oldWpMenu = document.getElementById('antigravity-wallpaper-menu');
       if (oldWpMenu) oldWpMenu.remove();
       const oldWpCtrl = document.getElementById('antigravity-wallpaper-ctrl');
@@ -124,6 +142,7 @@
   let lastStatsData = { ...DEFAULT_ZERO_STATS };
   let currentActiveConvId = null;
   let isMountingBar = false;
+  let pendingEnsureTokenBar = false;
   let popoverActiveTab = 'overview'; // 'overview' | 'context'
   let selectedSwarmNodeId = null;
   let swarmZoom = 1;
@@ -140,7 +159,12 @@
   let agentLastOutput = '';
   let isWindowBlurred = false;
   let swarmPrevFocusEl = null;
+  let popoverPrevFocusEl = null;
+  let wpPrevFocusEl = null;
   let wpMenuActiveTab = 'scenes'; // 'scenes' | 'fx'
+  let copyFeedbackKey = '';
+  let copyFeedbackUntilMs = 0;
+  let lastOverviewTreeWalkMs = 0;
 
   function isAppInactive() {
     return Boolean(document.hidden || isWindowBlurred);
@@ -173,11 +197,102 @@
         return `<svg ${base}><polyline points="20 6 9 17 4 12"/></svg>`;
       case 'network':
         return `<svg ${base}><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="19" cy="18" r="2.5"/><path d="M7.3 11.1 16.7 6.9"/><path d="M7.3 12.9 16.7 17.1"/></svg>`;
-      case 'image':
-        return `<svg ${base}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>`;
       default:
         return '';
     }
+  }
+
+  function cssAttrEscape(val) {
+    const s = String(val == null ? '' : val);
+    return (typeof CSS !== 'undefined' && typeof CSS.escape === 'function')
+      ? CSS.escape(s)
+      : s.replace(/["\\]/g, '\\$&');
+  }
+
+  function captureFocusDescriptor(root) {
+    try {
+      if (!root || typeof root.contains !== 'function') return null;
+      const active = document.activeElement;
+      if (!active || active === document.body || !root.contains(active)) return null;
+      if (active.id) return `#${cssAttrEscape(active.id)}`;
+      const attrs = [
+        'data-swarm-node',
+        'data-pop-tab',
+        'data-wp-tab',
+        'data-wp-file',
+        'data-pin-scope',
+        'data-greeting-mode',
+        'data-fx-key',
+        'data-sub-id',
+        'data-file-path',
+        'data-wp-action'
+      ];
+      for (const attr of attrs) {
+        const v = active.getAttribute && active.getAttribute(attr);
+        if (v !== null && v !== '') return `[${attr}="${cssAttrEscape(v)}"]`;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function restoreFocusDescriptor(root, selector) {
+    if (!root || !selector || typeof root.querySelector !== 'function') return false;
+    try {
+      const target = root.querySelector(selector);
+      if (target && typeof target.focus === 'function') {
+        try {
+          target.focus({ preventScroll: true });
+        } catch (_) {
+          target.focus();
+        }
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  function wireTablistArrowKeys(tablistRoot) {
+    if (!tablistRoot || typeof tablistRoot.querySelectorAll !== 'function') return;
+    const tabs = Array.from(tablistRoot.querySelectorAll('[role="tab"]'));
+    if (tabs.length < 2) return;
+    tabs.forEach((tb, idx) => {
+      tb.onkeydown = (e) => {
+        if (!e) return;
+        let nextIdx = -1;
+        if (e.key === 'ArrowRight') nextIdx = (idx + 1) % tabs.length;
+        else if (e.key === 'ArrowLeft') nextIdx = (idx - 1 + tabs.length) % tabs.length;
+        else if (e.key === 'Home') nextIdx = 0;
+        else if (e.key === 'End') nextIdx = tabs.length - 1;
+        if (nextIdx >= 0) {
+          if (e.preventDefault) e.preventDefault();
+          if (e.stopPropagation) e.stopPropagation();
+          const targetTab = tabs[nextIdx];
+          if (targetTab) {
+            // Focus targetTab before click() so captureFocusDescriptor preserves focus on the new tab across re-render
+            if (typeof targetTab.focus === 'function') {
+              try { targetTab.focus({ preventScroll: true }); } catch (_) { try { targetTab.focus(); } catch (__) {} }
+            }
+            if (typeof targetTab.click === 'function') targetTab.click();
+          }
+        }
+      };
+    });
+  }
+
+  function isCopyFeedbackActive(key) {
+    return Boolean(key && copyFeedbackKey === key && Date.now() < copyFeedbackUntilMs);
+  }
+
+  function triggerCopyFeedback(key, ms, rerenderFn) {
+    copyFeedbackKey = key || '';
+    copyFeedbackUntilMs = Date.now() + (ms || 1150);
+    setTimeout(() => {
+      if (copyFeedbackKey === key && Date.now() >= copyFeedbackUntilMs - 20) {
+        copyFeedbackKey = '';
+        copyFeedbackUntilMs = 0;
+        if (typeof rerenderFn === 'function') rerenderFn();
+      }
+    }, ms || 1150);
   }
 
   function hasDomStopIndicator(box) {
@@ -186,8 +301,12 @@
       if (box && typeof box.querySelector === 'function' && box.querySelector(selectors)) {
         return true;
       }
-      if (typeof document.querySelector === 'function' && document.querySelector(selectors)) {
-        return true;
+      const parent = box && box.parentElement;
+      if (parent && parent !== document.body && parent !== document.documentElement && typeof parent.querySelector === 'function') {
+        const hit = parent.querySelector(selectors);
+        if (hit && (!hit.closest || !hit.closest('#antigravity-wallpaper-menu, #antigravity-token-popover, #antigravity-swarm-modal'))) {
+          return true;
+        }
       }
     } catch (_) {}
     return false;
@@ -223,18 +342,13 @@
 
     if (isThinking) {
       agentVisualState = 'thinking';
-      agentDoneUntilMs = 0;
-    } else if (agentVisualState === 'thinking') {
-      agentVisualState = 'done';
-      agentDoneUntilMs = now + 1700;
-      if (window.__antigravity_done_timer) clearTimeout(window.__antigravity_done_timer);
-      window.__antigravity_done_timer = setTimeout(() => {
-        window.__antigravity_done_timer = 0;
-        syncAgentStateOnUi(findInputBox(), lastStatsData);
-      }, 1750);
-    } else if (agentVisualState === 'done' && now >= agentDoneUntilMs) {
+    } else {
       agentVisualState = 'idle';
-      agentDoneUntilMs = 0;
+    }
+    agentDoneUntilMs = 0;
+    if (window.__antigravity_done_timer) {
+      clearTimeout(window.__antigravity_done_timer);
+      window.__antigravity_done_timer = 0;
     }
 
     const targetBox = box || findInputBox();
@@ -244,11 +358,7 @@
       } else {
         targetBox.classList.remove('agy-milk-thinking');
       }
-      if (agentVisualState === 'done') {
-        targetBox.classList.add('agy-milk-done');
-      } else {
-        targetBox.classList.remove('agy-milk-done');
-      }
+      targetBox.classList.remove('agy-milk-done');
     }
     return agentVisualState;
   }
@@ -314,7 +424,7 @@
       if (!targetBox) return lastKnownModelName;
       const scopes = [targetBox];
       if (targetBox.parentElement) scopes.push(targetBox.parentElement);
-      const modelPattern = /\b(hydrogen|argon|carbon|3\.8\s*flash|gemini\s*3\.8|flash)\b/i;
+      const modelPattern = /\b(hydrogen|neon|argon|carbon|3\.8\s*flash|gemini\s*3\.8|flash)\b/i;
       let firstMatch = '';
       for (const scope of scopes) {
         if (!scope || typeof scope.querySelectorAll !== 'function') continue;
@@ -346,8 +456,8 @@
   function isLightSurface() {
     try {
       const bg = window.getComputedStyle(document.body).backgroundColor;
-      const m = bg && bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-      if (m) {
+      const m = bg && bg.match(/rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\s*\)/i);
+      if (m && (m[4] === undefined || parseFloat(m[4]) > 0.05)) {
         const lum = (0.299 * Number(m[1]) + 0.587 * Number(m[2]) + 0.114 * Number(m[3])) / 255;
         return lum > 0.55;
       }
@@ -409,7 +519,11 @@
   }
 
   async function ensureTokenBar() {
-    if (isMountingBar || document.hidden) return;
+    if (document.hidden) return;
+    if (isMountingBar) {
+      pendingEnsureTokenBar = true;
+      return;
+    }
     const box = findInputBox();
     if (!box || !box.parentElement) return;
 
@@ -431,13 +545,13 @@
             barBorder: 'rgba(0, 0, 0, 0.09)'
           }
         : {
-            muted: 'rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.82)',
+            muted: 'rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.80)',
             strong: '#f8f0e8',
             pillBg: 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.16)',
-            pillBorder: 'rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.44)',
-            track: 'rgba(255, 255, 255, 0.16)',
-            barBg: 'rgba(9, 10, 16, 0.80)',
-            barBorder: 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.24)'
+            pillBorder: 'rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.46)',
+            track: 'rgba(248, 224, 192, 0.16)',
+            barBg: 'rgba(9, 10, 16, 0.84)',
+            barBorder: 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.38)'
           };
 
       const convIdNow = getConversationIdFromLocation();
@@ -478,8 +592,8 @@
             'justify-content: space-between',
             'width: 100%',
             'margin-top: 4px',
-            'padding: 8px 12px',
-            'border-radius: 10px',
+            'padding: 7px 12px',
+            'border-radius: 6px',
             `background: ${palette.barBg}`,
             `border: 1px solid ${palette.barBorder}`,
             'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -561,53 +675,55 @@
           && document.getElementById('antigravity-token-popover').style.display !== 'none'
         );
 
+        const monoValStyle = `color: ${palette.strong}; font-weight: 600; font-family: var(--agy-font-mono, Consolas, monospace);`;
         const metricsLeftHtml = isIdleHome
           ? `<div style="display: flex; align-items: center; gap: 6px; color: ${palette.muted};">
-               <span style="width: 6px; height: 6px; border-radius: 9999px; background: rgb(var(--agy-accent-bright-rgb, 255, 68, 82)); opacity: 0.78; display: inline-block;"></span>
+               <span style="width: 6px; height: 6px; border-radius: 2px; background: rgb(var(--agy-accent-bright-rgb, 255, 68, 82)); opacity: 0.85; display: inline-block;"></span>
                <span>Монитор: новый чат</span>
              </div>`
           : `<div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px;">
             <div style="display: flex; align-items: center; gap: 5px;" title="${leftTitle}">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.88;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.84;">
                 <circle cx="12" cy="12" r="10"></circle>
                 <polyline points="12 6 12 12 16 14"></polyline>
               </svg>
-              <span><strong style="color: ${palette.strong}; font-weight: 600;">${stats.turns}</strong> turns <strong style="color: ${palette.strong}; font-weight: 600;">${stats.steps}</strong> steps · <strong style="color: ${palette.strong}; font-weight: 600;">${stats.speed}</strong> tok/s</span>
+              <span><strong style="${monoValStyle}">${stats.turns}</strong> turns <strong style="${monoValStyle}">${stats.steps}</strong> steps · <strong style="${monoValStyle}">${stats.speed}</strong> tok/s</span>
             </div>
 
             <div style="display: flex; align-items: center; gap: 5px;" title="${midTitle}">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.88;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.84;">
                 <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
                 <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
                 <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
               </svg>
-              <span><strong style="color: ${palette.strong}; font-weight: 600;">${stats.contextTokens}</strong> tok · Cache hit <strong style="color: ${palette.strong}; font-weight: 600;">${stats.cacheHit}%</strong></span>
+              <span><strong style="${monoValStyle}">${stats.contextTokens}</strong> tok · Cache hit <strong style="${monoValStyle}">${stats.cacheHit}%</strong></span>
             </div>
 
             <div style="display: flex; align-items: center; gap: 5px;" title="${totalTitle}">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.88;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.84;">
                 <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
                 <polyline points="2 17 12 22 22 17"></polyline>
                 <polyline points="2 12 12 17 22 12"></polyline>
               </svg>
-              <span><strong style="color: ${palette.strong}; font-weight: 600;">${stats.grandTotalTokens}</strong> total${subagentSuffix}</span>
+              <span><strong style="${monoValStyle}">${stats.grandTotalTokens}</strong> total${subagentSuffix}</span>
             </div>
           </div>`;
 
         const rightMetricsHtml = isIdleHome
           ? ''
-          : `<div style="display: flex; align-items: center; gap: 3px;" title="${costTitle}">
-              <span><strong style="color: ${palette.strong}; font-weight: 600;">${escapeAttr(stats.apiCost || '$0.00')}</strong></span>
+          : `<span aria-hidden="true" style="width: 1px; height: 12px; background: var(--agy-border-subtle, rgba(248, 224, 192, 0.16)); display: inline-block;"></span>
+            <div style="display: flex; align-items: center; gap: 3px;" title="${costTitle}">
+              <span><strong style="${monoValStyle}">${escapeAttr(formatUniformCost(stats.apiCost))}</strong></span>
             </div>
 
             <div style="display: flex; align-items: center; gap: 4px;" title="${workTimeTitle}">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.88;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity: 0.84;">
                 <path d="M5 22h14"></path>
                 <path d="M5 2h14"></path>
                 <path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"></path>
                 <path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"></path>
               </svg>
-              <span><strong style="color: ${palette.strong}; font-weight: 600;">${escapeAttr(stats.totalWorkTime)}</strong></span>
+              <span><strong style="${monoValStyle}">${escapeAttr(stats.totalWorkTime)}</strong></span>
             </div>`;
 
         barContent.innerHTML = `
@@ -621,15 +737,16 @@
               align-items: center;
               gap: 6px;
               padding: 3px 9px;
-              border-radius: 9999px;
+              border-radius: 4px;
               background: ${palette.pillBg};
               border: 1px solid ${palette.pillBorder};
               color: ${palette.strong};
               font: inherit;
+              font-family: var(--agy-font-mono, Consolas, monospace);
               user-select: none;
               cursor: pointer;
               transition: background 0.15s ease, border-color 0.15s ease;
-            " title="${pillTitle} (ЛКМ: подробная статистика)">
+            " aria-label="${pillTitle}" title="${pillTitle} (ЛКМ: подробная статистика)">
               <svg width="13" height="13" viewBox="0 0 36 36" aria-hidden="true">
                 <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="${palette.track}" stroke-width="4" />
                 ${progressArc}
@@ -673,6 +790,10 @@
       }
     } finally {
       isMountingBar = false;
+      if (pendingEnsureTokenBar) {
+        pendingEnsureTokenBar = false;
+        setTimeout(() => { ensureTokenBar(); }, 0);
+      }
     }
   }
 
@@ -698,25 +819,48 @@
     }
   }
 
+  function formatUniformCost(raw) {
+    if (raw === null || raw === undefined || raw === '') return '$0.00';
+    const str = String(raw).trim();
+    const m = str.match(/^\$?\s*([0-9]+(?:\.[0-9]+)?)$/);
+    if (!m) return str;
+    const num = Number(m[1]);
+    if (!Number.isFinite(num) || num <= 0) return '$0.00';
+    if (num < 0.01) return `$${num.toFixed(3)}`;
+    return `$${num.toFixed(2)}`;
+  }
+
   function buildSpeedSparklineSvg(speeds) {
     const arr = Array.isArray(speeds) ? speeds.filter((n) => typeof n === 'number' && n > 0) : [];
     const w = 248;
     const h = 38;
     if (arr.length === 0) {
-      return `<div style="height:${h}px;display:flex;align-items:center;justify-content:center;color:var(--agy-text-muted, rgba(248, 224, 192, 0.78));font-size:11px;border:1px dashed var(--agy-border-hairline, rgba(255,255,255,0.12));border-radius:6px;">Ожидание замеров скорости...</div>`;
+      return `<div style="height:${h}px;display:flex;align-items:center;justify-content:center;color:var(--agy-text-muted, rgba(248, 224, 192, 0.78));font-size:12px;border:1px dashed var(--agy-border-hairline, rgba(248,224,192,0.12));border-radius:4px;">Ожидание замеров скорости...</div>`;
     }
+    const sorted = [...arr].sort((a, b) => a - b);
+    const medianV = sorted[Math.floor(sorted.length / 2)] || sorted[0];
     const maxV = Math.max(...arr, 10);
     const minV = Math.min(...arr);
-    const span = Math.max(10, maxV - minV * 0.6);
-    const baseV = minV * 0.6;
-    const padX = 5;
+    // Compress extreme outliers (e.g. single 896 tok/s spike flattening normal ~68 tok/s history)
+    const useSqrtScale = arr.length >= 3 && maxV > medianV * 2.5;
+    const mapV = (v) => (useSqrtScale ? Math.sqrt(Math.max(0, v)) : v);
+    const mappedMin = mapV(minV * 0.6);
+    const mappedMax = mapV(maxV);
+    const span = Math.max(useSqrtScale ? 1 : 10, mappedMax - mappedMin);
+    const padX = 6;
     const padY = 5;
     const innerW = w - padX * 2;
     const innerH = h - padY * 2;
 
+    let peakIdx = 0;
+    for (let i = 1; i < arr.length; i++) {
+      if (arr[i] > arr[peakIdx]) peakIdx = i;
+    }
+
     const pts = arr.map((v, i) => {
       const x = arr.length === 1 ? w / 2 : padX + (i / (arr.length - 1)) * innerW;
-      const y = padY + innerH - Math.max(0, Math.min(1, (v - baseV) / span)) * innerH;
+      const norm = Math.max(0, Math.min(1, (mapV(v) - mappedMin) / span));
+      const y = padY + innerH - norm * innerH;
       return { x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), v };
     });
 
@@ -725,18 +869,20 @@
       ? `${pts[0].x},${h - 2} ${polyPoints} ${pts[pts.length - 1].x},${h - 2}`
       : `${padX},${h - 2} ${padX},${pts[0].y} ${w - padX},${pts[0].y} ${w - padX},${h - 2}`;
 
-    const dots = pts.map((p, idx) => {
-      const isLast = idx === pts.length - 1;
-      const r = isLast ? 2.6 : 1.7;
-      const fill = isLast ? 'rgb(var(--agy-secondary-rgb, 248, 224, 192))' : 'rgb(var(--agy-accent-bright-rgb, 255, 68, 82))';
-      return `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" />`;
-    }).join('');
+    const lastIdx = pts.length - 1;
+    const lastPt = pts[lastIdx];
+    const peakPt = pts[peakIdx];
+    const peakDot = (arr.length > 1 && peakIdx !== lastIdx)
+      ? `<circle cx="${peakPt.x}" cy="${peakPt.y}" r="2.2" fill="rgb(var(--agy-accent-bright-rgb, 255, 68, 82))" />`
+      : '';
+    const lastDot = `<circle cx="${lastPt.x}" cy="${lastPt.y}" r="2.7" fill="rgb(var(--agy-secondary-rgb, 248, 224, 192))" />`;
 
     return `
-      <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;width:100%;height:${h}px;border-radius:6px;background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.07);">
-        <polygon points="${areaPoints}" fill="rgba(var(--agy-accent-rgb, 198, 52, 60), 0.22)" />
-        ${arr.length > 1 ? `<polyline points="${polyPoints}" fill="none" stroke="rgb(var(--agy-accent-bright-rgb, 255, 68, 82))" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />` : `<line x1="${padX}" y1="${pts[0].y}" x2="${w - padX}" y2="${pts[0].y}" stroke="rgb(var(--agy-accent-bright-rgb, 255, 68, 82))" stroke-width="1.8" stroke-dasharray="3,3" />`}
-        ${dots}
+      <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;width:100%;height:${h}px;border-radius:4px;background:rgba(0,0,0,0.28);border:1px solid var(--agy-border-hairline, rgba(248,224,192,0.10));">
+        <polygon points="${areaPoints}" fill="rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.11)" />
+        ${arr.length > 1 ? `<polyline points="${polyPoints}" fill="none" stroke="rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.86)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />` : `<line x1="${padX}" y1="${pts[0].y}" x2="${w - padX}" y2="${pts[0].y}" stroke="rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.86)" stroke-width="1.6" stroke-dasharray="3,3" />`}
+        ${peakDot}
+        ${lastDot}
       </svg>
     `;
   }
@@ -749,8 +895,13 @@
     const pill = document.getElementById('antigravity-token-pill');
     if (pill) {
       pill.setAttribute('aria-expanded', 'false');
-      if (restoreFocus && typeof pill.focus === 'function') {
-        try { pill.focus(); } catch (_) {}
+    }
+    const prev = popoverPrevFocusEl;
+    popoverPrevFocusEl = null;
+    if (restoreFocus) {
+      const target = (prev && prev.isConnected && typeof prev.focus === 'function') ? prev : pill;
+      if (target && typeof target.focus === 'function') {
+        try { target.focus(); } catch (_) {}
       }
     }
   }
@@ -758,33 +909,56 @@
   function wrapSvgTextLines(text, maxChars = 35, maxLines = 2) {
     const clean = String(text || '').replace(/\s+/g, ' ').trim();
     if (!clean) return [''];
-    const words = clean.split(' ');
+    const rawWords = clean.split(' ');
+    // Expand overly long unbroken tokens (e.g. C:\Users\...\file.png) into chunked segments
+    const tokens = [];
+    for (const rw of rawWords) {
+      let rem = rw;
+      while (rem.length > maxChars) {
+        let cut = maxChars;
+        for (let j = maxChars; j >= Math.floor(maxChars * 0.45); j--) {
+          const ch = rem[j - 1];
+          if (ch === '\\' || ch === '/' || ch === '-' || ch === '_' || ch === '.') {
+            cut = j;
+            break;
+          }
+        }
+        tokens.push({ text: rem.slice(0, cut), joinSpace: tokens.length > 0 && rem === rw });
+        rem = rem.slice(cut);
+      }
+      if (rem) {
+        tokens.push({ text: rem, joinSpace: tokens.length > 0 && rem === rw });
+      }
+    }
+
     const lines = [];
     let cur = '';
-    for (let i = 0; i < words.length; i++) {
-      let w = words[i];
+    const pushEllipsis = () => {
+      const idx = lines.length - 1;
+      if (idx < 0) return;
+      const prev = lines[idx];
+      lines[idx] = prev.length >= maxChars ? `${prev.slice(0, maxChars - 1)}…` : `${prev}…`;
+    };
+
+    for (let i = 0; i < tokens.length; i++) {
+      const tk = tokens[i];
+      const sep = cur && tk.joinSpace ? ' ' : '';
       if (!cur) {
-        if (w.length > maxChars && maxLines > 1 && lines.length < maxLines - 1) {
-          lines.push(w.slice(0, maxChars));
-          w = w.slice(maxChars);
-        }
-        cur = w;
-      } else if ((cur.length + 1 + w.length) <= maxChars) {
-        cur = `${cur} ${w}`;
+        cur = tk.text;
+      } else if ((cur.length + sep.length + tk.text.length) <= maxChars) {
+        cur = `${cur}${sep}${tk.text}`;
       } else {
         lines.push(cur);
         if (lines.length >= maxLines) {
-          const prev = lines[maxLines - 1];
-          lines[maxLines - 1] = prev.length >= maxChars ? `${prev.slice(0, maxChars - 1)}…` : `${prev}…`;
+          pushEllipsis();
           return lines;
         }
-        cur = w;
+        cur = tk.text;
       }
     }
     if (cur) {
       if (lines.length >= maxLines) {
-        const last = lines[maxLines - 1];
-        lines[maxLines - 1] = last.length >= maxChars ? `${last.slice(0, maxChars - 1)}…` : `${last}…`;
+        pushEllipsis();
       } else if (cur.length > maxChars) {
         lines.push(`${cur.slice(0, maxChars - 1)}…`);
       } else {
@@ -846,10 +1020,10 @@
       childrenMap.get(pId).push(n);
     }
 
-    const nodeW = 264;
-    const nodeH = 74;
-    const colGap = 52;
-    const rowGap = 14;
+    const nodeW = 308;
+    const nodeH = 82;
+    const colGap = 46;
+    const rowGap = 12;
     const padX = 24;
     const padY = 20;
     const unitH = nodeH + rowGap;
@@ -919,37 +1093,41 @@
       edgesSvg += `<path d="${pathD}" fill="none" stroke="${strokeCol}" stroke-width="${isLive || isSelEdge ? 2 : 1.35}" ${isLive ? 'class="agy-swarm-edge-active"' : ''} />`;
     }
 
+    let defsSvg = '';
     let nodesSvg = '';
     const activeCount = subagents.filter((x) => x.isActive).length;
+    let nodeClipIdx = 0;
     for (const item of posMap.values()) {
       const n = item.node;
       const isRoot = n.depth === 0;
       const isSelected = n.id === activeSelId;
       const isLive = Boolean(n.isActive);
+      const clipId = `agy-sn-clip-${nodeClipIdx++}`;
+      const titleClipId = `${clipId}-t`;
 
       const bgCol = isSelected
-        ? 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.36)'
-        : (isRoot ? 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.24)' : 'rgba(18, 20, 30, 0.96)');
+        ? 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.30)'
+        : (isRoot ? 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.14)' : 'rgba(14, 15, 24, 0.96)');
       const borderCol = isSelected
         ? 'rgb(var(--agy-secondary-rgb, 248, 224, 192))'
-        : (isLive ? 'rgb(var(--agy-accent-bright-rgb, 255, 68, 82))' : 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.52)');
-      const barCol = isLive
-        ? 'rgb(var(--agy-accent-bright-rgb, 255, 68, 82))'
-        : (isRoot ? 'rgb(var(--agy-secondary-rgb, 248, 224, 192))' : 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.88)');
+        : (isLive
+          ? 'rgb(var(--agy-accent-bright-rgb, 255, 68, 82))'
+          : (isRoot ? 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.62)' : 'rgba(var(--agy-accent-rgb, 198, 52, 60), 0.42)'));
 
       const rawLabel = isRoot ? 'Main Chat' : cleanSwarmDisplayText(n.role || 'Subagent') || 'Subagent';
-      const shortLabel = rawLabel.length > 28 ? `${rawLabel.slice(0, 27)}…` : rawLabel;
+      const shortLabel = rawLabel.length > 30 ? `${rawLabel.slice(0, 29)}…` : rawLabel;
       const tagText = isLive ? 'LIVE' : (isRoot ? 'ROOT' : `S${n.depth}`);
       const cleanTask = cleanSwarmDisplayText(n.task || '');
       const cleanType = cleanSwarmDisplayText(n.agentType || '');
       const cleanTarget = cleanSwarmDisplayText(n.lastTarget || '');
       const rawTask = (cleanTask || cleanTarget || n.lastTool || (isRoot ? 'Основной чат' : 'Субагент')).replace(/\s+/g, ' ').trim();
-      const taskLines = wrapSvgTextLines(rawTask, 36, 2);
+      const taskLines = wrapSvgTextLines(rawTask, 40, 2);
       const taskLine1 = taskLines[0] || '';
       const taskLine2 = taskLines[1] || '';
-      const actionHint = n.lastTool ? ` · ${n.lastTool}` : '';
-      const rawMeta = `${n.tokens || '0'} tok · ${n.cost || '$0'} · ${n.workTime || '0s'}${actionHint}`;
-      const metaLine = rawMeta.length > 38 ? `${rawMeta.slice(0, 37)}…` : rawMeta;
+      const toolLabel = (n.lastTool && n.lastTool !== 'Ответ модели') ? n.lastTool : '';
+      const actionHint = toolLabel ? ` · ${toolLabel}` : '';
+      const rawMeta = `${n.tokens || '0'} tok · ${formatUniformCost(n.cost || '$0')} · ${n.workTime || '0s'}${actionHint}`;
+      const metaLine = rawMeta.length > 46 ? `${rawMeta.slice(0, 45)}…` : rawMeta;
       const fullTooltip = [
         rawLabel + (cleanType ? ` [${cleanType}]` : ''),
         cleanTask ? `Задача: ${cleanTask}` : '',
@@ -958,17 +1136,24 @@
       ].filter(Boolean).join('\n');
       const nodeAriaLabel = `${rawLabel} (${tagText}). ${rawTask}. ${metaLine}`;
 
+      const tagReserve = isLive ? 54 : (isRoot ? 48 : 34);
+      defsSvg += `
+        <clipPath id="${clipId}"><rect x="${item.x + 8}" y="${item.y + 4}" width="${nodeW - 16}" height="${nodeH - 8}" rx="3" /></clipPath>
+        <clipPath id="${titleClipId}"><rect x="${item.x + 8}" y="${item.y + 4}" width="${nodeW - 16 - tagReserve}" height="22" /></clipPath>
+      `;
+
       nodesSvg += `
         <g class="agy-swarm-node-g" data-swarm-node="${escapeAttr(n.id)}" tabindex="0" role="button" aria-pressed="${isSelected ? 'true' : 'false'}" aria-label="${escapeAttr(nodeAriaLabel)}" style="cursor:pointer;">
           <title>${escapeAttr(fullTooltip)}</title>
-          <rect x="${item.x}" y="${item.y}" width="${nodeW}" height="${nodeH}" rx="8" fill="${bgCol}" stroke="${borderCol}" stroke-width="${isSelected ? 2 : 1.2}" />
-          <rect x="${item.x}" y="${item.y}" width="4" height="${nodeH}" rx="2" fill="${barCol}" />
-          <text x="${item.x + 12}" y="${item.y + 18}" fill="#f8f0e8" font-size="12" font-weight="${isSelected || isRoot ? '700' : '600'}" style="pointer-events:none;">${escapeAttr(shortLabel)}</text>
-          <text x="${item.x + nodeW - (isLive ? 19 : 11)}" y="${item.y + 17}" text-anchor="end" fill="${isLive ? 'rgb(var(--agy-accent-bright-rgb, 255, 68, 82))' : 'rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.78)'}" font-size="11" font-weight="700" style="pointer-events:none;">${escapeAttr(tagText)}</text>
-          ${isLive ? `<circle cx="${item.x + nodeW - 10}" cy="${item.y + 13}" r="3.2" fill="rgb(var(--agy-accent-bright-rgb, 255, 68, 82))" class="agy-swarm-node-pulse" />` : ''}
-          <text x="${item.x + 12}" y="${item.y + 34}" fill="rgba(248,224,192,0.90)" font-size="11" style="pointer-events:none;">${escapeAttr(taskLine1)}</text>
-          ${taskLine2 ? `<text x="${item.x + 12}" y="${item.y + 47}" fill="rgba(248,224,192,0.84)" font-size="11" style="pointer-events:none;">${escapeAttr(taskLine2)}</text>` : ''}
-          <text x="${item.x + 12}" y="${item.y + 64}" fill="rgba(243,244,246,0.80)" font-size="11" style="pointer-events:none;">${escapeAttr(metaLine)}</text>
+          <rect x="${item.x}" y="${item.y}" width="${nodeW}" height="${nodeH}" rx="5" fill="${bgCol}" stroke="${borderCol}" stroke-width="${isSelected ? 1.8 : 1.1}" />
+          <text x="${item.x + 12}" y="${item.y + 20}" clip-path="url(#${titleClipId})" fill="#f8f0e8" font-size="12.5" font-weight="${isSelected || isRoot ? '700' : '600'}" style="pointer-events:none;">${escapeAttr(shortLabel)}</text>
+          <text x="${item.x + nodeW - (isLive ? 21 : 11)}" y="${item.y + 19}" text-anchor="end" fill="${isLive ? 'rgb(var(--agy-accent-bright-rgb, 255, 68, 82))' : 'rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.80)'}" font-size="12" font-weight="700" font-family="var(--agy-font-mono, Consolas, monospace)" style="pointer-events:none;">${escapeAttr(tagText)}</text>
+          ${isLive ? `<circle cx="${item.x + nodeW - 11}" cy="${item.y + 15}" r="3.2" fill="rgb(var(--agy-accent-bright-rgb, 255, 68, 82))" class="agy-swarm-node-pulse" />` : ''}
+          <g clip-path="url(#${clipId})">
+            <text x="${item.x + 12}" y="${item.y + 38}" fill="rgba(248,224,192,0.92)" font-size="12" style="pointer-events:none;">${escapeAttr(taskLine1)}</text>
+            ${taskLine2 ? `<text x="${item.x + 12}" y="${item.y + 53}" fill="rgba(248,224,192,0.82)" font-size="12" style="pointer-events:none;">${escapeAttr(taskLine2)}</text>` : ''}
+            <text x="${item.x + 12}" y="${item.y + 71}" fill="rgba(248,240,232,0.78)" font-size="12" font-family="var(--agy-font-mono, Consolas, monospace)" style="pointer-events:none;">${escapeAttr(metaLine)}</text>
+          </g>
         </g>
       `;
     }
@@ -982,7 +1167,7 @@
       maxDepth,
       svgW,
       svgH,
-      svgInner: edgesSvg + nodesSvg,
+      svgInner: `<defs>${defsSvg}</defs>${edgesSvg}${nodesSvg}`,
       sel
     };
   }
@@ -1039,19 +1224,19 @@
     }
   }
 
-  function fitSwarmCanvasToViewport(modal, svgW, svgH) {
+  function fitSwarmCanvasToViewport(modal, svgW, svgH, minScale = 0.45) {
     if (!modal) return;
     const vp = modal.querySelector && modal.querySelector('#agy-swarm-viewport');
     const vpW = (vp && vp.clientWidth) ? vp.clientWidth : 820;
     const vpH = (vp && vp.clientHeight) ? vp.clientHeight : 440;
     const scaleX = (vpW - 24) / Math.max(1, svgW);
     const scaleY = (vpH - 24) / Math.max(1, svgH);
-    const fit = Math.max(0.45, Math.min(1.15, Math.min(scaleX, scaleY)));
+    const fit = Math.max(minScale, Math.min(1.15, Math.min(scaleX, scaleY)));
     swarmZoom = Number(fit.toFixed(3));
     const drawW = svgW * swarmZoom;
     const drawH = svgH * swarmZoom;
-    swarmPanX = Math.max(12, Math.round((vpW - drawW) / 2));
-    swarmPanY = Math.max(12, Math.round((vpH - drawH) / 2));
+    swarmPanX = drawW <= vpW - 24 ? Math.round((vpW - drawW) / 2) : 16;
+    swarmPanY = drawH <= vpH - 24 ? Math.round((vpH - drawH) / 2) : 16;
     applySwarmCanvasTransform(modal);
   }
 
@@ -1062,6 +1247,7 @@
     const subagents = Array.isArray(s.subagents) ? s.subagents : [];
     const layout = computeSwarmLayout(s, convId, selectedSwarmNodeId);
 
+    const rootInfo = layout.rootEntry || {};
     const renderKey = [
       convId,
       modelName,
@@ -1069,7 +1255,11 @@
       s.grandTotalTokens,
       s.apiCost,
       s.subagentCount,
-      subagents.map((x) => `${x.id}:${x.steps}:${x.isActive ? 1 : 0}:${x.lastTool || ''}:${x.lastTarget || ''}:${(x.task || '').length}`).join(',')
+      rootInfo.isActive ? 1 : 0,
+      rootInfo.steps || 0,
+      rootInfo.tokens || '',
+      rootInfo.lastTool || '',
+      subagents.map((x) => `${x.id}:${x.steps}:${x.tokens || ''}:${x.cost || ''}:${x.workTime || ''}:${x.isActive ? 1 : 0}:${x.lastTool || ''}:${x.lastTarget || ''}:${(x.task || '').length}`).join(',')
     ].join('|');
 
     if (modal.dataset && modal.dataset.renderKey === renderKey) {
@@ -1081,7 +1271,14 @@
     }
     if (modal.dataset) modal.dataset.renderKey = renderKey;
 
+    const prevSwarmFocus = captureFocusDescriptor(modal);
+    const prevTaskBox = modal.querySelector && modal.querySelector('#agy-swarm-task-box');
+    const prevTaskScrollTop = prevTaskBox ? prevTaskBox.scrollTop : 0;
+    const prevSelNodeId = modal.dataset ? (modal.dataset.selNodeId || '') : '';
+
     const sel = layout.sel || {};
+    const swarmCopyKey = sel.id ? `swarm:${sel.id}` : '';
+    const swarmCopied = isCopyFeedbackActive(swarmCopyKey);
     const statusBadge = sel.isActive
       ? '<span class="agy-wp-menu-pill is-on">ACTIVE</span>'
       : '<span class="agy-wp-menu-pill is-off">DONE</span>';
@@ -1097,7 +1294,7 @@
       : '—';
     const filesMeta = sel.filesCount > 0 ? ` · Файлов: <strong style="color:var(--agy-text-primary, #ffffff);">${sel.filesCount}</strong>` : '';
     const taskBlockHtml = cleanSelTask
-      ? `<div style="margin:6px 0 7px;padding:6px 9px;border-radius:6px;background:rgba(0,0,0,0.28);font-size:11.5px;line-height:1.42;color:var(--agy-text-primary, rgba(248,240,232,0.94));max-height:58px;overflow-y:auto;">
+      ? `<div id="agy-swarm-task-box" style="margin:6px 0 7px;padding:6px 9px;border-radius:4px;background:rgba(0,0,0,0.28);font-size:12px;line-height:1.45;color:var(--agy-text-primary, rgba(248,240,232,0.94));max-height:62px;overflow-y:auto;">
            <span style="color:var(--agy-text-muted, rgba(248,224,192,0.82));font-weight:600;margin-right:5px;">Задача:</span>${escapeAttr(cleanSelTask)}
          </div>`
       : '';
@@ -1106,35 +1303,35 @@
       ? `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--agy-text-muted, rgba(248,224,192,0.82));font-size:13px;gap:8px;">
            <div style="opacity:0.86;color:rgb(var(--agy-accent-bright-rgb, 255, 68, 82));">${agyIcon('network', 28)}</div>
            <div style="color:var(--agy-text-primary, #f8f0e8);font-weight:600;">В этом чате субагенты ещё не запускались</div>
-           <div style="font-size:11.5px;">Как только агент вызовет субагентов, здесь появится интерактивное дерево роя</div>
+           <div style="font-size:12px;">Как только агент вызовет субагентов, здесь появится интерактивное дерево роя</div>
          </div>`
       : `
-        <div id="agy-swarm-viewport" style="position:relative;flex:1;overflow:hidden;border-radius:10px;background:rgba(5,6,11,0.78);border:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));cursor:grab;touch-action:none;">
+        <div id="agy-swarm-viewport" style="position:relative;flex:1;overflow:hidden;border-radius:6px;background:rgba(5,6,11,0.82);border:1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.26);cursor:grab;touch-action:none;">
           <div id="agy-swarm-stage" style="position:absolute;top:0;left:0;">
             <svg id="agy-swarm-svg" data-base-w="${layout.svgW}" data-base-h="${layout.svgH}" width="${Math.max(1, Math.round(layout.svgW * swarmZoom))}" height="${Math.max(1, Math.round(layout.svgH * swarmZoom))}" viewBox="0 0 ${layout.svgW} ${layout.svgH}" shape-rendering="geometricPrecision" text-rendering="geometricPrecision" style="display:block;">
               ${layout.svgInner}
             </svg>
           </div>
-          <div style="position:absolute;bottom:8px;right:10px;padding:3px 9px;border-radius:6px;background:rgba(5,6,11,0.86);border:1px solid var(--agy-border-hairline, rgba(255,255,255,0.10));font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.82));pointer-events:none;">
+          <div style="position:absolute;bottom:8px;right:10px;padding:3px 9px;border-radius:4px;background:rgba(5,6,11,0.88);border:1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.28);font-size:12px;color:var(--agy-text-muted, rgba(248,224,192,0.82));pointer-events:none;">
             Перетаскивайте фон · Колёсико: масштаб · Клик / Enter: детали · Стрелки: узлы
           </div>
         </div>
 
-        <div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:rgba(var(--agy-accent-rgb, 198, 52, 60), 0.12);border:1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.36);">
+        <div style="margin-top:10px;padding:10px 12px;border-radius:6px;background:rgba(var(--agy-accent-rgb, 198, 52, 60), 0.09);border:1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.38);">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
             <div style="display:flex;align-items:center;gap:8px;min-width:0;">
               <span style="font-weight:700;color:var(--agy-text-primary, #f8f0e8);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(cleanSelRole)}</span>
-              <span style="font-size:11.5px;color:var(--agy-text-muted, rgba(248,224,192,0.82));">${sel.depth ? `S${sel.depth}` : 'Корень'}</span>
-              ${typeAndModel ? `<span style="font-size:11px;padding:1px 6px;border-radius:5px;background:var(--agy-surface-subtle, rgba(255,255,255,0.06));color:var(--agy-text-secondary, rgba(248,224,192,0.88));white-space:nowrap;">${escapeAttr(typeAndModel)}</span>` : ''}
+              <span class="agy-mono" style="font-size:12px;color:var(--agy-text-muted, rgba(248,224,192,0.82));">${sel.depth ? `S${sel.depth}` : 'Корень'}</span>
+              ${typeAndModel ? `<span style="font-size:12px;padding:1px 6px;border-radius:4px;background:var(--agy-surface-subtle, rgba(248,224,192,0.06));color:var(--agy-text-secondary, rgba(248,240,232,0.88));white-space:nowrap;">${escapeAttr(typeAndModel)}</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
               ${statusBadge}
-              ${sel.id ? `<button type="button" id="agy-swarm-copy-id" data-copy-id="${escapeAttr(sel.id)}" class="agy-wp-menu-chip" style="padding:3px 8px;font-size:11px;" title="Скопировать ID: ${escapeAttr(sel.id)}"><span>${escapeAttr(shortSelId)}</span>${agyIcon('copy', 12)}</button>` : ''}
+              ${sel.id ? `<button type="button" id="agy-swarm-copy-id" data-copy-id="${escapeAttr(sel.id)}" class="agy-wp-menu-chip agy-mono" style="padding:3px 8px;font-size:12px;" title="Скопировать ID: ${escapeAttr(sel.id)}">${swarmCopied ? `${agyIcon('check', 12)}<span>Скопировано</span>` : `<span>${escapeAttr(shortSelId)}</span>${agyIcon('copy', 12)}`}</button>` : ''}
             </div>
           </div>
           ${taskBlockHtml}
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:11.5px;color:var(--agy-text-secondary, rgba(243,244,246,0.90));margin-top:${cleanSelTask ? '0' : '5px'};">
-            <span>Токены: <strong style="color:var(--agy-text-primary, #ffffff);">${escapeAttr(sel.tokens || '0')}</strong> · API: <strong style="color:var(--agy-text-primary, #ffffff);">${escapeAttr(sel.cost || '$0.00')}</strong> · Шаги: <strong style="color:var(--agy-text-primary, #ffffff);">${sel.steps || 0}</strong> · Время: <strong style="color:var(--agy-text-primary, #ffffff);">${escapeAttr(sel.workTime || '0s')}</strong>${filesMeta}</span>
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--agy-text-secondary, rgba(248,240,232,0.88));margin-top:${cleanSelTask ? '0' : '5px'};">
+            <span>Токены: <strong class="agy-mono" style="color:var(--agy-text-primary, #ffffff);">${escapeAttr(sel.tokens || '0')}</strong> · API: <strong class="agy-mono" style="color:var(--agy-text-primary, #ffffff);">${escapeAttr(formatUniformCost(sel.cost))}</strong> · Шаги: <strong class="agy-mono" style="color:var(--agy-text-primary, #ffffff);">${sel.steps || 0}</strong> · Время: <strong class="agy-mono" style="color:var(--agy-text-primary, #ffffff);">${escapeAttr(sel.workTime || '0s')}</strong>${filesMeta}</span>
             <span style="color:var(--agy-text-muted, rgba(248,224,192,0.84));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46%;">Действие: <strong style="color:var(--agy-text-primary, #f8f0e8);">${escapeAttr(actionCombined)}</strong></span>
           </div>
         </div>
@@ -1147,12 +1344,12 @@
         display: flex;
         flex-direction: column;
         padding: 14px 16px;
-        border-radius: 14px;
-        background: var(--agy-surface-panel, rgba(11, 12, 19, 0.96));
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.52);
-        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.82);
+        border-radius: 6px;
+        background: var(--agy-surface-panel, rgba(11, 12, 19, 0.97));
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.50);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.84);
         color: var(--agy-text-primary, #f8f0e8);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         font-variant-numeric: tabular-nums;
@@ -1161,15 +1358,15 @@
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-shrink:0;">
           <div style="display:flex;flex-direction:column;min-width:0;">
             <span id="agy-swarm-title" style="font-weight:700;color:var(--agy-text-primary, #f8f0e8);font-size:14px;">Карта роя субагентов</span>
-            <span style="font-size:11.5px;color:var(--agy-text-muted, rgba(248,224,192,0.82));">
-              Узлов: ${subagents.length + 1} (1 + ${subagents.length}) · Глубина: ${layout.maxDepth} · Активно: ${layout.activeCount} · Всего: ${escapeAttr(s.grandTotalTokens || '0')} tok (${escapeAttr(s.apiCost || '$0.00')})
+            <span class="agy-mono" style="font-size:12px;color:var(--agy-text-muted, rgba(248,224,192,0.82));">
+              Узлов: ${subagents.length + 1} (1 + ${subagents.length}) · Глубина: ${layout.maxDepth} · Активно: ${layout.activeCount} · Всего: ${escapeAttr(s.grandTotalTokens || '0')} tok (${escapeAttr(formatUniformCost(s.apiCost))})
             </span>
           </div>
           <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
             ${layout.empty ? '' : `
-              <button type="button" id="agy-swarm-zoom-out" class="agy-wp-menu-chip" title="Уменьшить" aria-label="Уменьшить масштаб">−</button>
-              <button type="button" id="agy-swarm-zoom-fit" class="agy-wp-menu-chip" title="Вписать весь граф в окно"><span id="agy-swarm-zoom-lbl">${Math.round(swarmZoom * 100)}%</span> · Вписать</button>
-              <button type="button" id="agy-swarm-zoom-in" class="agy-wp-menu-chip" title="Увеличить" aria-label="Увеличить масштаб">+</button>
+              <button type="button" id="agy-swarm-zoom-out" class="agy-wp-menu-chip agy-mono" title="Уменьшить" aria-label="Уменьшить масштаб">−</button>
+              <button type="button" id="agy-swarm-zoom-fit" class="agy-wp-menu-chip" title="Вписать весь граф в окно"><span id="agy-swarm-zoom-lbl" class="agy-mono">${Math.round(swarmZoom * 100)}%</span> · Вписать</button>
+              <button type="button" id="agy-swarm-zoom-in" class="agy-wp-menu-chip agy-mono" title="Увеличить" aria-label="Увеличить масштаб">+</button>
             `}
             <button type="button" id="agy-swarm-close" class="agy-wp-menu-chip" style="padding:4px 9px;" title="Закрыть (Esc)" aria-label="Закрыть карту роя">✕</button>
           </div>
@@ -1195,9 +1392,9 @@
       if (!swarmInitializedView) {
         swarmInitializedView = true;
         if (typeof requestAnimationFrame === 'function') {
-          requestAnimationFrame(() => fitSwarmCanvasToViewport(modal, layout.svgW, layout.svgH));
+          requestAnimationFrame(() => fitSwarmCanvasToViewport(modal, layout.svgW, layout.svgH, 0.85));
         } else {
-          fitSwarmCanvasToViewport(modal, layout.svgW, layout.svgH);
+          fitSwarmCanvasToViewport(modal, layout.svgW, layout.svgH, 0.85);
         }
       } else {
         applySwarmCanvasTransform(modal);
@@ -1343,14 +1540,25 @@
           if (e && e.stopPropagation) e.stopPropagation();
           const cid = swarmCopyBtn.dataset ? swarmCopyBtn.dataset.copyId : '';
           if (cid && copyTextToClipboard(cid)) {
-            const origHtml = swarmCopyBtn.innerHTML;
             swarmCopyBtn.innerHTML = `${agyIcon('check', 12)}<span>Скопировано</span>`;
-            setTimeout(() => {
-              if (swarmCopyBtn.isConnected) swarmCopyBtn.innerHTML = origHtml;
-            }, 1100);
+            triggerCopyFeedback(`swarm:${cid}`, 1100, () => {
+              if (modal.isConnected && modal.style && modal.style.display !== 'none') {
+                if (modal.dataset) modal.dataset.renderKey = '';
+                renderSwarmModal(modal, lastStatsData, modelName);
+              }
+            });
           }
         };
       }
+    }
+
+    if (modal.dataset) modal.dataset.selNodeId = sel.id || '';
+    const nextTaskBox = modal.querySelector && modal.querySelector('#agy-swarm-task-box');
+    if (nextTaskBox && prevTaskScrollTop > 0 && prevSelNodeId && prevSelNodeId === (sel.id || '')) {
+      nextTaskBox.scrollTop = prevTaskScrollTop;
+    }
+    if (prevSwarmFocus) {
+      restoreFocusDescriptor(modal, prevSwarmFocus);
     }
   }
 
@@ -1378,7 +1586,9 @@
         'display: flex',
         'align-items: center',
         'justify-content: center',
-        'background: rgba(5, 6, 12, 0.78)'
+        'background: rgba(5, 6, 12, 0.86)',
+        'backdrop-filter: blur(4px)',
+        '-webkit-backdrop-filter: blur(4px)'
       ].join(';');
       modal.onclick = () => closeSwarmModal();
       modal.onkeydown = (e) => {
@@ -1387,7 +1597,11 @@
         if (focusables.length === 0) return;
         const first = focusables[0];
         const last = focusables[focusables.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
+        const inside = modal.contains && modal.contains(document.activeElement);
+        if (!inside) {
+          if (e.preventDefault) e.preventDefault();
+          (e.shiftKey ? last : first).focus();
+        } else if (e.shiftKey && document.activeElement === first) {
           if (e.preventDefault) e.preventDefault();
           last.focus();
         } else if (!e.shiftKey && document.activeElement === last) {
@@ -1411,7 +1625,7 @@
   function getContextProgressColor(percent) {
     if (percent > 85) return '#ff2a3c';
     if (percent > 65) return '#f59e0b';
-    return 'rgb(var(--agy-accent-bright-rgb, 255, 68, 82))';
+    return 'rgb(var(--agy-secondary-rgb, 248, 224, 192))';
   }
 
   function renderTokenPopover(popover, stats, modelName) {
@@ -1453,37 +1667,39 @@
       s.exactPercent,
       s.apiCost,
       s.pricingLabel,
-      subagents.length,
+      subagents.map((x) => `${x.id}:${x.steps}:${x.tokens || ''}:${x.cost || ''}:${x.workTime || ''}:${x.isActive ? 1 : 0}`).join(','),
       inspSummary.total,
       inspSummary.approxTokens,
-      inspFiles.length
+      inspFiles.map((f) => `${f.name}:${f.reads}:${f.edits}`).join(',')
     ].join('|');
 
     if (popover.dataset && popover.dataset.renderKey === renderKey) {
       return;
     }
     if (popover.dataset) popover.dataset.renderKey = renderKey;
+    const prevPopFocus = captureFocusDescriptor(popover);
     popover.setAttribute('role', 'dialog');
     popover.setAttribute('aria-label', 'Монитор сессии');
 
     const subRowsHtml = subagents.map((sub, idx) => {
       const roleText = escapeAttr(sub.role || `Subagent #${idx + 1}`);
       const subIdAttr = escapeAttr(sub.id || '');
-      const costPart = sub.cost ? ` · ${escapeAttr(sub.cost)}` : '';
+      const costPart = sub.cost ? ` · ${escapeAttr(formatUniformCost(sub.cost))}` : '';
       const subMeta = `${escapeAttr(sub.tokens || '0')} tok${costPart} · ${escapeAttr(sub.workTime || '0s')}`;
+      const isCopied = isCopyFeedbackActive(`sub:${sub.id || ''}`);
       return `
         <button type="button" class="agy-pop-sub-row" data-sub-id="${subIdAttr}" title="ЛКМ: скопировать ID субагента (${subIdAttr})">
-          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:124px;font-weight:600;color:var(--agy-text-primary, #f8f0e8);">${roleText}</span>
-          <span style="color:var(--agy-text-muted, rgba(248,224,192,0.82));font-size:11px;flex-shrink:0;">${subMeta}</span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:124px;font-weight:600;color:var(--agy-text-primary, #f8f0e8);">${isCopied ? 'Скопировано' : roleText}</span>
+          <span class="agy-mono" style="color:var(--agy-text-muted, rgba(248,224,192,0.82));font-size:12px;flex-shrink:0;">${subMeta}</span>
         </button>
       `;
     }).join('');
 
     const subSectionHtml = subagents.length > 0 ? `
-      <div style="margin-top:9px;padding-top:8px;border-top:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.82));">
+      <div style="margin-top:9px;padding-top:8px;border-top:1px solid var(--agy-border-hairline, rgba(248,224,192,0.10));">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;font-size:12px;color:var(--agy-text-muted, rgba(248,224,192,0.82));">
           <span>Субагенты (${s.subagentCount || subagents.length})</span>
-          <span>${escapeAttr(s.subagentTotalTokens)} tok · ${escapeAttr(s.apiCostSubagents || '$0.00')}</span>
+          <span class="agy-mono">${escapeAttr(s.subagentTotalTokens)} tok · ${escapeAttr(formatUniformCost(s.apiCostSubagents))}</span>
         </div>
         <div style="display:flex;flex-direction:column;gap:4px;max-height:102px;overflow-y:auto;padding-right:2px;">
           ${subRowsHtml}
@@ -1491,28 +1707,28 @@
       </div>
     ` : '';
 
-    const costDetails = `In ${escapeAttr(s.apiCostInput || '$0.00')} · Кэш ${escapeAttr(s.apiCostCache || '$0.00')} · Out ${escapeAttr(s.apiCostOutput || '$0.00')}`;
+    const costDetails = `In ${escapeAttr(formatUniformCost(s.apiCostInput))} · Кэш ${escapeAttr(formatUniformCost(s.apiCostCache))} · Out ${escapeAttr(formatUniformCost(s.apiCostOutput))}`;
 
     const overviewHtml = `
       <div style="margin-bottom:9px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;font-size:11.5px;margin-bottom:4px;">
-          <span style="color:var(--agy-text-secondary, rgba(243,244,246,0.88));">Заполнение окна</span>
-          <strong style="color:var(--agy-text-primary, #ffffff);font-weight:600;">${escapeAttr(s.contextTokens)} / ${escapeAttr(s.modelLimitLabel)} (${s.exactPercent}%)</strong>
+        <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+          <span style="color:var(--agy-text-secondary, rgba(248,240,232,0.88));">Заполнение окна</span>
+          <strong class="agy-mono" style="color:var(--agy-text-primary, #ffffff);font-weight:600;">${escapeAttr(s.contextTokens)} / ${escapeAttr(s.modelLimitLabel)} (${s.exactPercent}%)</strong>
         </div>
-        <div style="width:100%;height:6px;border-radius:9999px;background:var(--agy-border-subtle, rgba(255,255,255,0.12));overflow:hidden;">
-          <div style="width:${barWidth}%;height:100%;border-radius:9999px;background:${progressColor};transition:width 0.25s ease;"></div>
+        <div style="width:100%;height:5px;border-radius:2px;background:var(--agy-border-subtle, rgba(248,224,192,0.14));overflow:hidden;">
+          <div style="width:${barWidth}%;height:100%;border-radius:2px;background:${progressColor};transition:width 0.25s ease;"></div>
         </div>
       </div>
 
-      <div style="margin-bottom:8px;padding:7px 9px;border-radius:8px;background:rgba(var(--agy-accent-rgb, 198, 52, 60), 0.14);">
+      <div style="margin-bottom:8px;padding:7px 9px;border-radius:4px;background:rgba(var(--agy-accent-rgb, 198, 52, 60), 0.10);border:1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.30);">
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <span class="agy-pop-stat-lbl">Стоимость по API</span>
-          <span style="font-size:13px;font-weight:700;color:var(--agy-text-primary, #ffffff);">${escapeAttr(s.apiCost || '$0.00')}</span>
+          <span class="agy-mono" style="font-size:13px;font-weight:700;color:var(--agy-text-primary, #ffffff);">${escapeAttr(formatUniformCost(s.apiCost))}</span>
         </div>
-        <div style="font-size:11px;color:var(--agy-text-secondary, rgba(243,244,246,0.86));margin-top:2px;">
+        <div class="agy-mono" style="font-size:12px;color:var(--agy-text-secondary, rgba(248,240,232,0.86));margin-top:2px;">
           <span>${costDetails}</span>
         </div>
-        <div style="font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.78));margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(s.pricingLabel || 'Gemini API')}</div>
+        <div style="font-size:12px;color:var(--agy-text-muted, rgba(248,224,192,0.78));margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(s.pricingLabel || 'Gemini API')}</div>
       </div>
 
       <div class="agy-pop-metric-grid">
@@ -1543,9 +1759,9 @@
       </div>
 
       <div>
-        <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.82));margin-bottom:4px;">
-          <span>Скорость: <strong style="color:var(--agy-text-primary, #f8f0e8);">${s.speed} tok/s</strong></span>
-          <span>мин ${minSpeed} · пик ${peakSpeed} tok/s</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--agy-text-muted, rgba(248,224,192,0.82));margin-bottom:4px;">
+          <span>Скорость: <strong class="agy-mono" style="color:var(--agy-text-primary, #f8f0e8);">${s.speed} tok/s</strong></span>
+          <span class="agy-mono">мин ${minSpeed} · пик ${peakSpeed} tok/s</span>
         </div>
         ${buildSpeedSparklineSvg(speeds)}
       </div>
@@ -1553,7 +1769,7 @@
     `;
 
     const topToolsHtml = topTools.length > 0
-      ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">${topTools.map((t) => `<span class="agy-pop-tool-chip">${escapeAttr(t.name)} ×${t.count}</span>`).join('')}</div>`
+      ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">${topTools.map((t) => `<span class="agy-pop-tool-chip agy-mono">${escapeAttr(t.name)} ×${t.count}</span>`).join('')}</div>`
       : '';
 
     const filesRowsHtml = inspFiles.length > 0
@@ -1562,14 +1778,15 @@
           const badgeR = f.reads > 0 ? `<span style="opacity:0.88;">R×${f.reads}</span>` : '';
           const badgeE = f.edits > 0 ? `<span style="color:rgb(var(--agy-secondary-rgb, 248, 224, 192));font-weight:700;">E×${f.edits}</span>` : '';
           const badges = [badgeR, badgeE].filter(Boolean).join(' ');
+          const isCopied = isCopyFeedbackActive(`file:${f.path || ''}`);
           return `
             <button type="button" class="agy-pop-sub-row${isHot ? ' is-warn' : ''}" data-file-path="${escapeAttr(f.path)}" title="${escapeAttr(f.path)} (ЛКМ: скопировать путь)">
-              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:170px;font-weight:${f.edits > 0 ? '600' : '500'};color:${f.edits > 0 ? 'var(--agy-text-primary, #f8f0e8)' : 'var(--agy-text-secondary, rgba(243,244,246,0.88))'};">${escapeAttr(f.name)}</span>
-              <span style="display:flex;gap:5px;font-size:11px;flex-shrink:0;">${badges}</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:170px;font-weight:${f.edits > 0 ? '600' : '500'};color:${f.edits > 0 ? 'var(--agy-text-primary, #f8f0e8)' : 'var(--agy-text-secondary, rgba(248,240,232,0.88))'};">${isCopied ? 'Скопировано' : escapeAttr(f.name)}</span>
+              <span class="agy-mono" style="display:flex;gap:5px;font-size:12px;flex-shrink:0;">${badges}</span>
             </button>
           `;
         }).join('')
-      : `<div style="padding:10px;text-align:center;color:var(--agy-text-muted, rgba(248,224,192,0.78));font-size:11px;border:1px dashed var(--agy-border-hairline, rgba(255,255,255,0.12));border-radius:7px;">Файлы в этом чате ещё не читались</div>`;
+      : `<div style="padding:10px;text-align:center;color:var(--agy-text-muted, rgba(248,224,192,0.78));font-size:12px;border:1px dashed var(--agy-border-hairline, rgba(248,224,192,0.12));border-radius:4px;">Файлы в этом чате ещё не читались</div>`;
 
     const contextHtml = `
       <div class="agy-pop-metric-grid cols-3">
@@ -1599,7 +1816,7 @@
         </div>
       </div>
       ${topToolsHtml}
-      <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.82));margin-bottom:5px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--agy-text-muted, rgba(248,224,192,0.82));margin-bottom:5px;">
         <span>Файлы в контексте (${inspFiles.length})</span>
         <span>клик — копировать путь</span>
       </div>
@@ -1614,18 +1831,20 @@
     popover.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
         <div style="display:flex;flex-direction:column;min-width:0;">
-          <span style="font-weight:700;color:var(--agy-text-primary, #f8f0e8);font-size:12.5px;">Монитор сессии</span>
-          <span style="font-size:11px;color:var(--agy-text-muted, rgba(248,224,192,0.78));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(modelName || 'Авто-модель')} · ${escapeAttr(s.modelLimitLabel)}</span>
+          <span style="font-weight:700;color:var(--agy-text-primary, #f8f0e8);font-size:13px;">Монитор сессии</span>
+          <span style="font-size:12px;color:var(--agy-text-muted, rgba(248,224,192,0.78));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeAttr(modelName || 'Авто-модель')} · <span class="agy-mono">${escapeAttr(s.modelLimitLabel)}</span></span>
         </div>
-        ${convId ? `<button type="button" id="agy-pop-copy-conv" class="agy-wp-menu-chip" title="Скопировать ID чата: ${escapeAttr(convId)}"><span>${escapeAttr(shortConv)}</span>${agyIcon('copy', 12)}</button>` : ''}
+        ${convId ? `<button type="button" id="agy-pop-copy-conv" class="agy-wp-menu-chip agy-mono" title="Скопировать ID чата: ${escapeAttr(convId)}">${isCopyFeedbackActive(`conv:${convId}`) ? `${agyIcon('check', 12)}<span>Скопировано</span>` : `<span>${escapeAttr(shortConv)}</span>${agyIcon('copy', 12)}`}</button>` : ''}
       </div>
 
-      <div role="tablist" aria-label="Разделы монитора" style="display:flex;gap:5px;margin-bottom:9px;padding-bottom:7px;border-bottom:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));">
-        <button type="button" role="tab" aria-selected="${popoverActiveTab === 'overview' ? 'true' : 'false'}" class="agy-wp-menu-chip${popoverActiveTab === 'overview' ? ' is-active' : ''}" data-pop-tab="overview" style="flex:1;padding:4px 6px;">Обзор · ${escapeAttr(s.apiCost || '$0.00')}</button>
-        <button type="button" role="tab" aria-selected="${popoverActiveTab === 'context' ? 'true' : 'false'}" class="agy-wp-menu-chip${popoverActiveTab === 'context' ? ' is-active' : ''}" data-pop-tab="context" style="flex:1;padding:4px 6px;">Инспектор (${inspSummary.total})</button>
+      <div id="agy-pop-tablist" role="tablist" aria-label="Разделы монитора" style="display:flex;gap:5px;margin-bottom:9px;padding-bottom:7px;border-bottom:1px solid var(--agy-border-hairline, rgba(248,224,192,0.10));">
+        <button type="button" role="tab" aria-selected="${popoverActiveTab === 'overview' ? 'true' : 'false'}" class="agy-wp-menu-chip${popoverActiveTab === 'overview' ? ' is-active' : ''}" data-pop-tab="overview" style="flex:1;padding:4px 6px;">Обзор · <span class="agy-mono">${escapeAttr(formatUniformCost(s.apiCost))}</span></button>
+        <button type="button" role="tab" aria-selected="${popoverActiveTab === 'context' ? 'true' : 'false'}" class="agy-wp-menu-chip${popoverActiveTab === 'context' ? ' is-active' : ''}" data-pop-tab="context" style="flex:1;padding:4px 6px;">Инспектор (<span class="agy-mono">${inspSummary.total}</span>)</button>
       </div>
 
-      ${popoverActiveTab === 'context' ? contextHtml : overviewHtml}
+      <div role="tabpanel">
+        ${popoverActiveTab === 'context' ? contextHtml : overviewHtml}
+      </div>
     `;
 
     if (__popScrolls.length > 0) {
@@ -1645,17 +1864,21 @@
         }
       };
     }
+    const popTablist = popover.querySelector && popover.querySelector('#agy-pop-tablist');
+    if (popTablist) wireTablistArrowKeys(popTablist);
 
     const copyBtn = popover.querySelector && popover.querySelector('#agy-pop-copy-conv');
     if (copyBtn && convId) {
       copyBtn.onclick = (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
         if (copyTextToClipboard(convId)) {
-          const origHtml = copyBtn.innerHTML;
           copyBtn.innerHTML = `${agyIcon('check', 12)}<span>Скопировано</span>`;
-          setTimeout(() => {
-            if (copyBtn.isConnected) copyBtn.innerHTML = origHtml;
-          }, 1200);
+          triggerCopyFeedback(`conv:${convId}`, 1600, () => {
+            if (popover.isConnected && popover.style && popover.style.display !== 'none') {
+              if (popover.dataset) popover.dataset.renderKey = '';
+              renderTokenPopover(popover, lastStatsData, modelName);
+            }
+          });
         }
       };
     }
@@ -1664,16 +1887,24 @@
     for (const btn of subBtns) {
       btn.onclick = (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
-        const val = btn.dataset ? (btn.dataset.subId || btn.dataset.filePath || '') : '';
+        const subId = btn.dataset ? (btn.dataset.subId || '') : '';
+        const filePath = btn.dataset ? (btn.dataset.filePath || '') : '';
+        const val = subId || filePath;
+        const fbKey = subId ? `sub:${subId}` : `file:${filePath}`;
         if (val && copyTextToClipboard(val)) {
           const firstSpan = btn.querySelector && btn.querySelector('span');
-          const orig = firstSpan ? firstSpan.textContent : '';
           if (firstSpan) firstSpan.textContent = 'Скопировано';
-          setTimeout(() => {
-            if (firstSpan && firstSpan.isConnected) firstSpan.textContent = orig;
-          }, 1100);
+          triggerCopyFeedback(fbKey, 1500, () => {
+            if (popover.isConnected && popover.style && popover.style.display !== 'none') {
+              if (popover.dataset) popover.dataset.renderKey = '';
+              renderTokenPopover(popover, lastStatsData, modelName);
+            }
+          });
         }
       };
+    }
+    if (prevPopFocus) {
+      restoreFocusDescriptor(popover, prevPopFocus);
     }
   }
 
@@ -1686,6 +1917,7 @@
       closeTokenPopover(false);
       return;
     }
+    popoverPrevFocusEl = document.activeElement || null;
     if (!popover) {
       popover = document.createElement('div');
       popover.id = 'antigravity-token-popover';
@@ -1701,6 +1933,10 @@
     popover.style.display = 'block';
     const pill = document.getElementById('antigravity-token-pill');
     if (pill) pill.setAttribute('aria-expanded', 'true');
+    const popFocusTarget = popover.querySelector && (popover.querySelector('[role="tab"][aria-selected="true"]') || popover.querySelector('button'));
+    if (popFocusTarget && typeof popFocusTarget.focus === 'function') {
+      try { popFocusTarget.focus({ preventScroll: true }); } catch (_) { try { popFocusTarget.focus(); } catch (__) {} }
+    }
   }
 
   // =========================================================================
@@ -1727,13 +1963,20 @@
   let wallpaperTransparentNodes = [];
   let wallpaperClearedGradients = [];
   let milkBackdropNodes = [];
+  let milkScrollFeedEl = null;
+  let milkChatFrameEl = null;
+  let milkFrameStageEl = null;
+  let milkFrameFeedEl = null;
+  let milkFrameColEl = null;
+  let milkFrameRaf = 0;
+  let milkFrameResizeObs = null;
+  let milkScrollBoundFeed = null;
   let milkSidebarEl = null;
   let milkHeaderEl = null;
   let milkHeaderEls = [];
   let milkGreetingEl = null;
   let milkOverviewCardEl = null;
   let milkActiveSidebarItem = null;
-  let wallpaperPaletteCache = new Map();
 
   const FX_PREFS_STORAGE_KEY = 'agy_milk_fx_prefs_v1';
   const DEFAULT_FX_PREFS = {
@@ -1823,9 +2066,6 @@
     })();
     return fxPrefsHydratePromise;
   }
-  let wpMenuCloseTimer = 0;
-  let wpMenuPinned = false;
-
   // Fixed crimson/red Milk palette used uniformly across all wallpapers
   const RED_PALETTE = {
     accent: '198, 52, 60',
@@ -1834,7 +2074,6 @@
     spotlight: '245, 165, 145',
     dust: '224, 64, 76'
   };
-  const PALETTE_PRESETS = [RED_PALETTE];
   let currentDynamicPalette = { ...RED_PALETTE };
 
   function applyDynamicPalette() {
@@ -1863,13 +2102,9 @@
     }
   }
 
-  function extractPaletteFromImage() {
-    applyDynamicPalette();
-    return currentDynamicPalette;
-  }
-
   const MOD_OWNED_IDS = new Set([
     'antigravity-milk-style',
+    'agy-milk-chat-frame',
     'antigravity-wallpaper-layer',
     'antigravity-wallpaper-menu',
     'antigravity-wallpaper-ctrl',
@@ -1894,12 +2129,13 @@
   const OVERVIEW_PANEL_CSS = `
       html body .agy-milk-overview-card,
       .agy-milk-overview-card {
-        background-color: rgba(11, 10, 17, 0.92) !important;
-        background-image: linear-gradient(165deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.16) 0%, rgba(12, 11, 18, 0.90) 45%, rgba(8, 8, 14, 0.96) 100%) !important;
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.44) !important;
-        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68), inset 0 1px 0 rgba(255, 224, 200, 0.08) !important;
+        background-color: rgba(11, 10, 17, 0.93) !important;
+        background-image: linear-gradient(170deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.12) 0%, rgba(11, 10, 17, 0.92) 48%, rgba(8, 8, 14, 0.96) 100%) !important;
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.46) !important;
+        border-radius: 6px !important;
+        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68), inset 0 1px 0 rgba(248, 224, 192, 0.06) !important;
         scrollbar-width: thin;
         scrollbar-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.36) transparent;
         transition: border-color 0.35s ease, box-shadow 0.35s ease, background-color 0.3s ease;
@@ -1918,10 +2154,10 @@
       .agy-milk-overview-card hr,
       .agy-milk-overview-card [class*="border-t"],
       .agy-milk-overview-card [class*="border-b"] {
-        border-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.28) !important;
+        border-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.26) !important;
       }
       .agy-milk-overview-line {
-        background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.28) !important;
+        background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.26) !important;
       }
       .agy-milk-overview-card button,
       .agy-milk-overview-card [role="button"],
@@ -1942,8 +2178,11 @@
         outline-offset: 2px !important;
       }
       .agy-milk-overview-badge {
-        background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.32) !important;
-        border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.50) !important;
+        background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.26) !important;
+        border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.44) !important;
+        border-radius: 4px !important;
+        font-family: var(--agy-font-mono, "Cascadia Mono", Consolas, monospace) !important;
+        font-variant-numeric: tabular-nums !important;
         color: rgb(var(--agy-secondary-rgb, 248, 224, 192)) !important;
       }
   `;
@@ -1962,24 +2201,37 @@
     }
     const nextCss = `
       :root {
-        --agy-surface-panel: rgba(11, 12, 19, 0.96);
-        --agy-surface-card: rgba(18, 20, 30, 0.92);
-        --agy-surface-subtle: rgba(255, 255, 255, 0.05);
-        --agy-border-subtle: rgba(255, 255, 255, 0.14);
-        --agy-border-hairline: rgba(255, 255, 255, 0.09);
+        --agy-font-mono: "Cascadia Mono", "JetBrains Mono", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace;
+        --agy-surface-panel: rgba(11, 12, 19, 0.97);
+        --agy-surface-card: rgba(16, 17, 26, 0.94);
+        --agy-surface-subtle: rgba(248, 224, 192, 0.05);
+        --agy-border-structural: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.44);
+        --agy-border-subtle: rgba(248, 224, 192, 0.14);
+        --agy-border-hairline: rgba(248, 224, 192, 0.10);
         --agy-text-primary: #f8f0e8;
-        --agy-text-secondary: rgba(243, 244, 246, 0.88);
+        --agy-text-secondary: rgba(248, 240, 232, 0.88);
         --agy-text-muted: rgba(248, 224, 192, 0.78);
       }
       :root.agy-light-surface {
         --agy-surface-panel: rgba(252, 250, 248, 0.98);
         --agy-surface-card: rgba(244, 240, 237, 0.96);
         --agy-surface-subtle: rgba(0, 0, 0, 0.05);
+        --agy-border-structural: rgba(24, 24, 27, 0.18);
         --agy-border-subtle: rgba(0, 0, 0, 0.14);
         --agy-border-hairline: rgba(0, 0, 0, 0.09);
         --agy-text-primary: #18181b;
         --agy-text-secondary: #27272a;
         --agy-text-muted: #52525b;
+      }
+      :root.agy-light-surface .agy-wp-menu-chip.is-active,
+      :root.agy-light-surface .agy-wp-menu-pill.is-on {
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.90);
+        border-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 1);
+        color: #ffffff;
+      }
+      .agy-mono {
+        font-family: var(--agy-font-mono, "Cascadia Mono", Consolas, monospace);
+        font-variant-numeric: tabular-nums;
       }
       @keyframes agy-milk-input-pulse {
         0%, 100% {
@@ -2014,15 +2266,35 @@
         background: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.65);
       }
       .agy-milk-dialog-box {
-        background-color: rgba(10, 11, 18, 0.91) !important;
-        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.42) !important;
-        border-radius: 12px !important;
+        background-color: rgba(10, 11, 18, 0.92) !important;
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.38) !important;
+        border-radius: 6px !important;
         padding: 14px 20px !important;
         box-sizing: border-box !important;
         min-width: 0 !important;
         overflow-x: clip !important;
         box-shadow: 0 8px 26px rgba(0, 0, 0, 0.54) !important;
         transition: border-color 0.35s ease, box-shadow 0.35s ease;
+      }
+      .agy-milk-dialog-box.agy-milk-dialog-framed {
+        background-color: transparent !important;
+        border-color: transparent !important;
+        box-shadow: none !important;
+      }
+      .agy-milk-scroll-feed {
+        clip-path: inset(1px 0 1px 0) !important;
+      }
+      #agy-milk-chat-frame {
+        position: absolute;
+        z-index: 1;
+        pointer-events: none;
+        box-sizing: border-box;
+        background-color: rgba(10, 11, 18, 0.92);
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.38);
+        border-radius: 6px;
+        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.54);
+        transition: border-color 0.35s ease, box-shadow 0.35s ease;
+        display: none;
       }
       .agy-milk-table-wrap {
         width: 100% !important;
@@ -2070,27 +2342,45 @@
         word-break: break-word !important;
       }
       .agy-milk-dialog-box pre {
-        background-color: rgba(7, 8, 14, 0.78) !important;
-        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.28) !important;
-        border-radius: 8px !important;
+        background-color: rgba(7, 8, 14, 0.80) !important;
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.26) !important;
+        border-radius: 4px !important;
       }
       .agy-milk-dialog-box :not(pre) > code {
         background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.16) !important;
         border-radius: 4px !important;
       }
-      .agy-milk-input-box {
-        background-color: rgba(10, 11, 18, 0.92) !important;
+      .agy-milk-input-box:not(.agy-milk-input-shell),
+      .agy-milk-input-surface {
+        background-color: rgba(10, 11, 18, 0.93) !important;
+        background-image: none !important;
         backdrop-filter: blur(8px);
         -webkit-backdrop-filter: blur(8px);
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.48) !important;
         border-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.48) !important;
         transition: border-color 0.35s ease, box-shadow 0.35s ease;
       }
-      .agy-milk-input-box.agy-milk-thinking {
-        animation: agy-milk-input-pulse 1.8s ease-in-out infinite !important;
+      .agy-milk-input-box.agy-milk-input-shell {
+        background-color: transparent !important;
+        background-image: none !important;
+        border-color: transparent !important;
+        box-shadow: none !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
       }
-      .agy-milk-input-box.agy-milk-done {
-        border-color: rgba(var(--agy-secondary-rgb, 248, 224, 192), 0.88) !important;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.56) !important;
+      .agy-milk-input-inner-clear {
+        background-color: transparent !important;
+        background-image: none !important;
+        border-color: transparent !important;
+        box-shadow: none !important;
+      }
+      .agy-milk-input-box:not(.agy-milk-input-shell):focus-within,
+      .agy-milk-input-surface:focus-within {
+        border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.78) !important;
+      }
+      .agy-milk-input-box.agy-milk-thinking:not(.agy-milk-input-shell),
+      .agy-milk-input-box.agy-milk-thinking .agy-milk-input-surface {
+        animation: agy-milk-input-pulse 1.8s ease-in-out infinite !important;
       }
       [role="menu"],
       [role="listbox"],
@@ -2101,18 +2391,18 @@
       .monaco-hover,
       .quick-input-widget,
       .monaco-dialog-box {
-        background-color: var(--agy-surface-panel, rgba(11, 12, 19, 0.96)) !important;
+        background-color: var(--agy-surface-panel, rgba(11, 12, 19, 0.97)) !important;
         color: var(--agy-text-primary, #f8f0e8) !important;
-        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.42) !important;
+        border: 1px solid var(--agy-border-structural, rgba(248, 224, 192, 0.20)) !important;
         box-shadow: 0 12px 32px rgba(0, 0, 0, 0.68) !important;
       }
       .agy-milk-sidebar {
-        background-color: rgba(10, 10, 15, 0.88) !important;
-        background-image: linear-gradient(180deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.14) 0%, rgba(14, 11, 18, 0.78) 28%, rgba(8, 8, 13, 0.94) 100%) !important;
-        backdrop-filter: blur(14px);
-        -webkit-backdrop-filter: blur(14px);
-        border-right: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.34) !important;
-        box-shadow: inset -1px 0 0 rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.12), 6px 0 24px rgba(0, 0, 0, 0.44);
+        background-color: rgba(10, 10, 15, 0.90) !important;
+        background-image: linear-gradient(180deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.12) 0%, rgba(12, 10, 16, 0.86) 30%, rgba(8, 8, 13, 0.95) 100%) !important;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-right: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.36) !important;
+        box-shadow: inset -1px 0 0 rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.10), 6px 0 24px rgba(0, 0, 0, 0.44);
         transition: border-color 0.45s ease, background-color 0.35s ease;
       }
       .agy-milk-sidebar > div,
@@ -2121,14 +2411,15 @@
       }
       .agy-milk-sidebar button[aria-label*="New Conversation"],
       .agy-milk-sidebar a[href="/"] {
-        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.42) !important;
-        background: linear-gradient(90deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.18), rgba(18, 12, 20, 0.74)) !important;
-        box-shadow: inset 0 1px 0 rgba(255, 224, 200, 0.08);
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.44) !important;
+        border-radius: 4px !important;
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.15) !important;
+        box-shadow: inset 0 1px 0 rgba(248, 224, 192, 0.06);
       }
       .agy-milk-sidebar button[aria-label*="New Conversation"]:hover,
       .agy-milk-sidebar a[href="/"]:hover {
         border-color: rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.78) !important;
-        background: linear-gradient(90deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.30), rgba(24, 14, 22, 0.84)) !important;
+        background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.26) !important;
       }
       .agy-milk-sidebar a,
       .agy-milk-sidebar button {
@@ -2139,8 +2430,8 @@
         background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.13) !important;
       }
       .agy-milk-sidebar-active {
-        border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.42) !important;
-        border-radius: 6px !important;
+        border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.56) !important;
+        border-radius: 4px !important;
         background-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.22) !important;
         box-shadow: 0 2px 10px rgba(0, 0, 0, 0.34) !important;
       }
@@ -2156,11 +2447,11 @@
         background-image: none !important;
       }
       .agy-milk-header {
-        background-color: rgba(11, 10, 16, 0.88) !important;
-        background-image: linear-gradient(90deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.16) 0%, rgba(14, 11, 18, 0.82) 38%, rgba(9, 9, 14, 0.92) 100%) !important;
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border-bottom: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.30) !important;
+        background-color: rgba(11, 10, 16, 0.90) !important;
+        background-image: linear-gradient(90deg, rgba(var(--agy-accent-rgb, 198, 52, 60), 0.12) 0%, rgba(12, 10, 16, 0.88) 42%, rgba(9, 9, 14, 0.94) 100%) !important;
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border-bottom: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.34) !important;
         box-shadow: 0 4px 18px rgba(0, 0, 0, 0.36);
         transition: border-color 0.45s ease, background-color 0.35s ease;
       }
@@ -2229,7 +2520,7 @@
       }
       #antigravity-wallpaper-ctrl,
       #antigravity-swarm-corner-btn {
-        border-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.50) !important;
+        border-color: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.48) !important;
         box-shadow: 0 4px 14px rgba(0, 0, 0, 0.52);
       }
       #antigravity-wallpaper-ctrl:hover,
@@ -2244,15 +2535,17 @@
       }
       #antigravity-token-popover {
         position: absolute;
-        bottom: 38px;
+        bottom: calc(100% + 6px);
         right: 8px;
         z-index: 10001;
-        width: min(324px, calc(100vw - 24px));
+        width: min(332px, calc(100vw - 24px));
+        max-height: calc(100vh - 96px);
+        overflow-y: auto;
         padding: 12px 14px;
-        border-radius: 12px;
-        background: var(--agy-surface-panel, rgba(11, 12, 19, 0.96));
-        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.46);
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.72);
+        border-radius: 6px;
+        background: var(--agy-surface-panel, rgba(11, 12, 19, 0.97));
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.50);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.74);
         color: var(--agy-text-primary, #f8f0e8);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         font-size: 12px;
@@ -2266,8 +2559,8 @@
         gap: 6px 12px;
         padding: 6px 0 8px;
         margin-bottom: 8px;
-        border-top: 1px solid var(--agy-border-hairline, rgba(255, 255, 255, 0.09));
-        border-bottom: 1px solid var(--agy-border-hairline, rgba(255, 255, 255, 0.09));
+        border-top: 1px solid var(--agy-border-hairline, rgba(248, 224, 192, 0.10));
+        border-bottom: 1px solid var(--agy-border-hairline, rgba(248, 224, 192, 0.10));
       }
       .agy-pop-metric-grid.cols-3 {
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2279,19 +2572,13 @@
         gap: 1px;
         min-width: 0;
       }
-      .agy-pop-stat-card {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        padding: 6px 8px;
-        border-radius: 8px;
-        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.05));
-      }
       .agy-pop-stat-lbl {
-        font-size: 11.5px;
+        font-size: 12px;
         color: var(--agy-text-muted, rgba(248, 224, 192, 0.78));
       }
       .agy-pop-stat-val {
+        font-family: var(--agy-font-mono, "Cascadia Mono", Consolas, monospace);
+        font-variant-numeric: tabular-nums;
         font-size: 12.5px;
         font-weight: 600;
         color: var(--agy-text-primary, #f8f0e8);
@@ -2303,9 +2590,9 @@
         gap: 6px;
         width: 100%;
         padding: 5px 8px;
-        border-radius: 6px;
-        border: 1px solid var(--agy-border-hairline, rgba(255, 255, 255, 0.09));
-        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.04));
+        border-radius: 4px;
+        border: 1px solid var(--agy-border-hairline, rgba(248, 224, 192, 0.10));
+        background: var(--agy-surface-subtle, rgba(248, 224, 192, 0.04));
         color: var(--agy-text-primary, #f8f0e8);
         font-size: 12px;
         cursor: pointer;
@@ -2322,11 +2609,11 @@
       }
       .agy-pop-tool-chip {
         padding: 2px 7px;
-        border-radius: 5px;
-        font-size: 11px;
-        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.06));
-        border: 1px solid var(--agy-border-hairline, rgba(255, 255, 255, 0.10));
-        color: var(--agy-text-secondary, rgba(243, 244, 246, 0.88));
+        border-radius: 4px;
+        font-size: 12px;
+        background: var(--agy-surface-subtle, rgba(248, 224, 192, 0.06));
+        border: 1px solid var(--agy-border-hairline, rgba(248, 224, 192, 0.10));
+        color: var(--agy-text-secondary, rgba(248, 240, 232, 0.88));
       }
       @keyframes agy-swarm-flow {
         to { stroke-dashoffset: -16; }
@@ -2349,16 +2636,21 @@
         appearance: none;
         width: 100%;
         height: 4px;
-        border-radius: 9999px;
-        background: var(--agy-border-subtle, rgba(255, 255, 255, 0.18));
+        border-radius: 2px;
+        background: linear-gradient(
+          to right,
+          rgb(var(--agy-accent-bright-rgb, 255, 68, 82)) 0%,
+          rgb(var(--agy-accent-bright-rgb, 255, 68, 82)) var(--agy-slider-pct, 100%),
+          var(--agy-border-subtle, rgba(248, 224, 192, 0.18)) var(--agy-slider-pct, 100%)
+        );
         cursor: pointer;
       }
       .agy-wp-slider::-webkit-slider-thumb {
         -webkit-appearance: none;
         appearance: none;
-        width: 13px;
-        height: 13px;
-        border-radius: 50%;
+        width: 12px;
+        height: 12px;
+        border-radius: 2px;
         background: rgb(var(--agy-accent-bright-rgb, 255, 68, 82));
         border: 1.5px solid #f8f0e8;
         cursor: pointer;
@@ -2372,10 +2664,10 @@
         max-height: calc(100vh - 80px);
         overflow-y: auto;
         padding: 14px 16px;
-        border-radius: 14px;
-        background: var(--agy-surface-panel, rgba(11, 12, 19, 0.96));
-        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.44);
-        box-shadow: 0 14px 36px rgba(0, 0, 0, 0.74);
+        border-radius: 6px;
+        background: var(--agy-surface-panel, rgba(11, 12, 19, 0.97));
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.50);
+        box-shadow: 0 14px 36px rgba(0, 0, 0, 0.76);
         color: var(--agy-text-primary, #f8f0e8);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         font-size: 12px;
@@ -2388,7 +2680,7 @@
         gap: 6px;
         margin-bottom: 10px;
         padding-bottom: 8px;
-        border-bottom: 1px solid var(--agy-border-hairline, rgba(255, 255, 255, 0.09));
+        border-bottom: 1px solid var(--agy-border-hairline, rgba(248, 224, 192, 0.10));
       }
       .agy-wp-thumb-grid {
         display: grid;
@@ -2396,7 +2688,7 @@
         gap: 8px;
         margin-bottom: 10px;
         padding-bottom: 10px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        border-bottom: 1px solid var(--agy-border-hairline, rgba(248, 224, 192, 0.10));
       }
       .agy-wp-thumb-btn {
         position: relative;
@@ -2406,11 +2698,11 @@
         aspect-ratio: 16 / 9;
         padding: 0;
         margin: 0;
-        border-radius: 7px;
+        border-radius: 4px;
         overflow: hidden;
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        background: rgba(18, 20, 30, 0.92);
-        color: rgba(243, 244, 246, 0.85);
+        border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.28);
+        background: rgba(16, 17, 26, 0.92);
+        color: rgba(248, 240, 232, 0.85);
         cursor: pointer;
         display: block;
         transition: border-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease, opacity 0.15s ease;
@@ -2424,12 +2716,16 @@
         box-shadow: 0 0 0 1px rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.65), 0 4px 10px rgba(0, 0, 0, 0.45);
       }
       .agy-wp-thumb-btn.is-locked:not(.is-active) {
-        opacity: 0.46;
         cursor: not-allowed;
         transform: none;
       }
+      .agy-wp-thumb-btn.is-locked:not(.is-active) .agy-wp-thumb-img,
+      .agy-wp-thumb-btn.is-locked:not(.is-active) .agy-wp-thumb-fallback {
+        opacity: 0.42;
+        filter: grayscale(0.28);
+      }
       .agy-wp-thumb-btn.is-locked:not(.is-active):hover {
-        border-color: rgba(255, 255, 255, 0.22);
+        border-color: rgba(248, 224, 192, 0.22);
         transform: none;
       }
       .agy-wp-thumb-img {
@@ -2452,10 +2748,11 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 11px;
+        font-family: var(--agy-font-mono, "Cascadia Mono", Consolas, monospace);
+        font-size: 12px;
         font-weight: 700;
-        color: rgba(243, 244, 246, 0.6);
-        background: linear-gradient(135deg, rgba(var(--agy-accent-rgb, 173, 50, 51), 0.18), rgba(14, 15, 24, 0.92));
+        color: rgba(248, 240, 232, 0.68);
+        background: rgba(14, 15, 24, 0.94);
         pointer-events: none;
       }
       .agy-wp-thumb-idx {
@@ -2463,11 +2760,15 @@
         left: 4px;
         bottom: 4px;
         z-index: 2;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
         padding: 1px 5px;
-        border-radius: 4px;
-        background: rgba(8, 8, 12, 0.84);
+        border-radius: 3px;
+        background: rgba(8, 8, 12, 0.88);
         color: #f8f0e8;
-        font-size: 11px;
+        font-family: var(--agy-font-mono, "Cascadia Mono", Consolas, monospace);
+        font-size: 12px;
         font-weight: 700;
         line-height: 14px;
         pointer-events: none;
@@ -2478,24 +2779,25 @@
         right: 4px;
         z-index: 2;
         padding: 1px 5px;
-        border-radius: 4px;
+        border-radius: 3px;
         background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.95);
         border: 1px solid rgba(255, 204, 204, 0.50);
         color: #ffffff;
-        font-size: 11px;
+        font-family: var(--agy-font-mono, "Cascadia Mono", Consolas, monospace);
+        font-size: 12px;
         font-weight: 800;
-        line-height: 13px;
+        line-height: 14px;
         letter-spacing: 0.02em;
         pointer-events: none;
       }
       .agy-wp-lock-note {
         margin: 0 0 8px;
         padding: 5px 8px;
-        border-radius: 6px;
+        border-radius: 4px;
         background: rgba(var(--agy-accent-rgb, 198, 52, 60), 0.20);
         border: 1px solid rgba(var(--agy-accent-bright-rgb, 255, 68, 82), 0.48);
         color: #ffe2e2;
-        font-size: 11px;
+        font-size: 12px;
         line-height: 1.35;
       }
       @keyframes agyWpLockPulse {
@@ -2512,11 +2814,11 @@
         justify-content: center;
         gap: 4px;
         padding: 4px 9px;
-        border-radius: 6px;
-        border: 1px solid var(--agy-border-subtle, rgba(255, 255, 255, 0.14));
-        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.05));
-        color: var(--agy-text-secondary, rgba(243, 244, 246, 0.88));
-        font-size: 11.5px;
+        border-radius: 4px;
+        border: 1px solid var(--agy-border-subtle, rgba(248, 224, 192, 0.14));
+        background: var(--agy-surface-subtle, rgba(248, 224, 192, 0.05));
+        color: var(--agy-text-secondary, rgba(248, 240, 232, 0.88));
+        font-size: 12px;
         font-weight: 600;
         cursor: pointer;
         transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
@@ -2538,24 +2840,26 @@
         width: 100%;
         padding: 5px 7px;
         border: none;
-        border-radius: 6px;
+        border-radius: 4px;
         background: transparent;
-        color: var(--agy-text-secondary, rgba(243, 244, 246, 0.90));
+        color: var(--agy-text-secondary, rgba(248, 240, 232, 0.90));
         font-size: 12px;
         cursor: pointer;
         text-align: left;
         transition: background 0.15s ease;
       }
       .agy-wp-menu-toggle:hover {
-        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.06));
+        background: var(--agy-surface-subtle, rgba(248, 224, 192, 0.06));
       }
       .agy-wp-menu-pill {
         display: inline-flex;
         align-items: center;
         gap: 4px;
         padding: 2px 7px;
-        border-radius: 9999px;
-        font-size: 11px;
+        border-radius: 4px;
+        font-family: var(--agy-font-mono, "Cascadia Mono", Consolas, monospace);
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
         font-weight: 700;
         letter-spacing: 0.02em;
       }
@@ -2565,8 +2869,8 @@
         color: rgb(var(--agy-secondary-rgb, 248, 224, 192));
       }
       .agy-wp-menu-pill.is-off {
-        background: var(--agy-surface-subtle, rgba(255, 255, 255, 0.06));
-        border: 1px solid var(--agy-border-subtle, rgba(255, 255, 255, 0.16));
+        background: var(--agy-surface-subtle, rgba(248, 224, 192, 0.06));
+        border: 1px solid var(--agy-border-subtle, rgba(248, 224, 192, 0.16));
         color: var(--agy-text-muted, rgba(248, 224, 192, 0.78));
       }
       #antigravity-wallpaper-layer {
@@ -2633,8 +2937,9 @@
         outline: none;
       }
       .agy-swarm-node-g:focus-visible rect:first-of-type {
-        stroke: rgb(var(--agy-secondary-rgb, 248, 224, 192)) !important;
-        stroke-width: 2.5px !important;
+        stroke: rgb(var(--agy-accent-bright-rgb, 255, 68, 82)) !important;
+        stroke-width: 2.4px !important;
+        stroke-dasharray: 4 2;
       }
       @media (prefers-reduced-motion: reduce) {
         .agy-milk-input-box.agy-milk-thinking,
@@ -2646,6 +2951,7 @@
         }
         #antigravity-wallpaper-layer,
         #antigravity-wp-spotlight,
+        #agy-milk-chat-frame,
         .agy-milk-dialog-box,
         .agy-milk-input-box,
         .agy-milk-sidebar,
@@ -2662,13 +2968,124 @@
     }
   }
 
+  function hideChatFrameBackdrop() {
+    if (milkFrameRaf && typeof cancelAnimationFrame === 'function') {
+      try { cancelAnimationFrame(milkFrameRaf); } catch (_) {}
+      milkFrameRaf = 0;
+    }
+    if (milkChatFrameEl && milkChatFrameEl.style) {
+      milkChatFrameEl.style.display = 'none';
+    }
+    if (milkScrollFeedEl && milkScrollFeedEl.classList) {
+      try { milkScrollFeedEl.classList.remove('agy-milk-scroll-feed'); } catch (_) {}
+    }
+    milkScrollFeedEl = null;
+    milkFrameStageEl = null;
+    milkFrameFeedEl = null;
+    milkFrameColEl = null;
+  }
+
+  function syncChatFrameGeometry() {
+    milkFrameRaf = 0;
+    const frame = milkChatFrameEl;
+    const stage = milkFrameStageEl;
+    const feed = milkFrameFeedEl;
+    const col = milkFrameColEl;
+    if (!frame || !stage || !feed || !col || !stage.isConnected || !feed.isConnected || !col.isConnected) {
+      if (frame && frame.style) frame.style.display = 'none';
+      return;
+    }
+    try {
+      const stageRect = stage.getBoundingClientRect();
+      const feedRect = feed.getBoundingClientRect();
+      const colRect = col.getBoundingClientRect();
+      const visTop = Math.max(feedRect.top, colRect.top);
+      const visBottom = Math.min(feedRect.bottom, colRect.bottom);
+      const h = visBottom - visTop;
+      if (colRect.width < 120 || h < 24) {
+        frame.style.display = 'none';
+        if (col.classList) col.classList.remove('agy-milk-dialog-framed');
+        return;
+      }
+      if (col.classList && !col.classList.contains('agy-milk-dialog-framed')) {
+        col.classList.add('agy-milk-dialog-framed');
+      }
+      const left = Math.round(colRect.left - stageRect.left - (stage.clientLeft || 0));
+      const top = Math.round(visTop - stageRect.top - (stage.clientTop || 0));
+      const width = Math.round(colRect.width);
+      const height = Math.round(h);
+      frame.style.left = `${left}px`;
+      frame.style.top = `${top}px`;
+      frame.style.width = `${width}px`;
+      frame.style.height = `${height}px`;
+      frame.style.display = 'block';
+    } catch (_) {
+      frame.style.display = 'none';
+    }
+  }
+
+  function scheduleChatFrameSync() {
+    if (milkFrameRaf) return;
+    if (typeof requestAnimationFrame === 'function') {
+      milkFrameRaf = requestAnimationFrame(syncChatFrameGeometry);
+    } else {
+      syncChatFrameGeometry();
+    }
+  }
+
+  function syncPromptBarSpacing(feed, box, inChat) {
+    if (!box) return;
+    try {
+      const surfaceEl = (typeof box.querySelector === 'function' ? box.querySelector('.agy-milk-input-surface') : null) || box;
+      const bar = typeof document.getElementById === 'function' ? document.getElementById('antigravity-token-stats-bar') : null;
+      const TARGET_GAP = 6;
+
+      let actualTopGap = TARGET_GAP;
+      if (inChat && feed && typeof feed.getBoundingClientRect === 'function' && typeof surfaceEl.getBoundingClientRect === 'function') {
+        const feedRect = feed.getBoundingClientRect();
+        const surfaceRect = surfaceEl.getBoundingClientRect();
+        const curBoxMt = parseFloat(box.style && box.style.marginTop) || 0;
+        const rawTopGap = (surfaceRect.top - feedRect.bottom) - curBoxMt;
+        if (rawTopGap >= -4 && rawTopGap <= 18) {
+          const nextBoxMt = Math.max(0, Math.min(12, Math.round(TARGET_GAP - rawTopGap)));
+          if (Math.abs(nextBoxMt - curBoxMt) >= 1) {
+            box.style.marginTop = `${nextBoxMt}px`;
+          }
+          actualTopGap = rawTopGap + nextBoxMt;
+        } else if (box.style && box.style.marginTop) {
+          box.style.removeProperty('margin-top');
+        }
+      } else if (box.style && box.style.marginTop) {
+        box.style.removeProperty('margin-top');
+      }
+
+      if (bar && bar.isConnected && typeof bar.getBoundingClientRect === 'function' && typeof surfaceEl.getBoundingClientRect === 'function') {
+        const sRect = surfaceEl.getBoundingClientRect();
+        const bRect = bar.getBoundingClientRect();
+        const curBarMt = parseFloat(bar.style && bar.style.marginTop) || 0;
+        const rawBotGap = (bRect.top - sRect.bottom) - curBarMt;
+        if (rawBotGap >= -4 && rawBotGap <= 24) {
+          const wantGap = (inChat && feed) ? Math.max(4, Math.min(10, Math.round(actualTopGap))) : 6;
+          const nextBarMt = Math.max(-12, Math.min(12, Math.round(wantGap - rawBotGap)));
+          if (Math.abs(nextBarMt - curBarMt) >= 1) {
+            bar.style.marginTop = `${nextBarMt}px`;
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   function clearChatMessageBackdrops() {
     for (const node of milkBackdropNodes) {
       try {
-        if (node && node.classList) node.classList.remove('agy-milk-dialog-box');
+        if (node && node.classList) {
+          node.classList.remove('agy-milk-dialog-box');
+          node.classList.remove('agy-milk-dialog-framed');
+        }
       } catch (_) {}
     }
     milkBackdropNodes = [];
+    hideChatFrameBackdrop();
   }
 
   function ensureSidebarAndHeaderTheme(stage, box, convId) {
@@ -2721,13 +3138,16 @@
               row = row.parentElement;
             }
           };
-          milkSidebarEl.addEventListener('mouseover', (e) => {
+          const hoverFn = (e) => {
             if (!e || !e.target) return;
             clearActionStripInRow(e.target);
             if (typeof requestAnimationFrame === 'function') {
               requestAnimationFrame(() => clearActionStripInRow(e.target));
             }
-          }, { passive: true });
+          };
+          milkSidebarEl.addEventListener('mouseover', hoverFn, { passive: true });
+          window.__antigravity_sidebar_hover_el = milkSidebarEl;
+          window.__antigravity_sidebar_hover_fn = hoverFn;
         }
       }
 
@@ -3069,9 +3489,39 @@
         }
       };
 
-      // Defer expensive shadow/iframe root discovery unless Overview panel is not yet cached
-      const searchRoots = [];
+      // Pass 1: Fast floating-popover / dialog selector match across document & open iframes
       if (!cardCandidate) {
+        const popSel = '.animate-overview-panel, [role="dialog"], [role="menu"], [data-radix-popper-content-wrapper] > *, [data-state="open"]';
+        const fastRoots = [];
+        if (document.body) fastRoots.push(document.body);
+        try {
+          const frames = document.querySelectorAll('iframe');
+          for (let i = 0; i < Math.min(frames.length, 8); i++) {
+            try {
+              const fDoc = frames[i].contentDocument;
+              if (fDoc && fDoc.body) fastRoots.push(fDoc.body);
+            } catch (_) {}
+          }
+        } catch (_) {}
+        for (const rootEl of fastRoots) {
+          if (!rootEl || typeof rootEl.querySelectorAll !== 'function') continue;
+          const pops = rootEl.querySelectorAll(popSel);
+          for (let i = 0; i < pops.length; i++) {
+            const p = pops[i];
+            if (!p || isModOwnedNode(p) || p === box || (box && box.contains && box.contains(p))) continue;
+            if ((p.classList && p.classList.contains('animate-overview-panel')) || hasOverviewCardLandmarks(p.textContent || '')) {
+              considerHit(scoreOverviewAncestors(p));
+            }
+          }
+        }
+        if (bestOverall) cardCandidate = bestOverall.el;
+      }
+
+      // Pass 2: Throttled heavy shadowRoot + TreeWalker fallback (avoids 6000-node DOM walks on every chat token)
+      const nowOverviewMs = Date.now();
+      if (!cardCandidate && typeof NodeFilter !== 'undefined' && (lastOverviewTreeWalkMs === 0 || (nowOverviewMs - lastOverviewTreeWalkMs) >= 2000)) {
+        lastOverviewTreeWalkMs = nowOverviewMs;
+        const searchRoots = [];
         if (document.body) searchRoots.push({ doc: document, root: document.body });
         try {
           const frames = document.querySelectorAll('iframe');
@@ -3100,13 +3550,10 @@
             }
           } catch (_) {}
         }
-      }
 
-      // Pass 1: Fast floating-popover / dialog selector match across all scopes
-      if (!cardCandidate) {
         const popSel = '.animate-overview-panel, [role="dialog"], [role="menu"], [data-radix-popper-content-wrapper] > *, [data-state="open"]';
         for (const entry of searchRoots) {
-          if (!entry || !entry.root || typeof entry.root.querySelectorAll !== 'function') continue;
+          if (!entry || !entry.root || entry.root === document.body || typeof entry.root.querySelectorAll !== 'function') continue;
           const pops = entry.root.querySelectorAll(popSel);
           for (let i = 0; i < pops.length; i++) {
             const p = pops[i];
@@ -3116,10 +3563,7 @@
             }
           }
         }
-      }
 
-      // Pass 2: TreeWalker text-node discovery evaluating all matches (avoids chat-feed hijacking)
-      if (!cardCandidate && typeof NodeFilter !== 'undefined') {
         const labelRe = /^(?:Overview|Subagents|Background Tasks)\b/i;
         const skipTags = new Set(['SCRIPT', 'STYLE', 'SVG', 'CANVAS', 'PRE', 'CODE', 'TEXTAREA', 'INPUT', 'BLOCKQUOTE']);
         for (const entry of searchRoots) {
@@ -3226,7 +3670,7 @@
       const node = queue.shift();
       visited++;
       if (!node || node === box || (box.contains && box.contains(node))) continue;
-      if (node.id === 'antigravity-wallpaper-layer' || node.id === 'antigravity-wallpaper-ctrl' || node.id === 'antigravity-wallpaper-menu' || node.id === 'antigravity-wp-fx-canvas' || node.id === 'antigravity-corner-dock') continue;
+      if (node.id === 'antigravity-wallpaper-layer' || node.id === 'agy-milk-chat-frame' || node.id === 'antigravity-wallpaper-ctrl' || node.id === 'antigravity-wallpaper-menu' || node.id === 'antigravity-wp-fx-canvas' || node.id === 'antigravity-corner-dock') continue;
       try {
         const st = window.getComputedStyle(node);
         const isScroll = st && (st.overflowY === 'auto' || st.overflowY === 'scroll');
@@ -3349,20 +3793,90 @@
     }
   }
 
+  function syncInputSurfaceTheme(box) {
+    if (!box || !box.classList) return;
+    box.classList.add('agy-milk-input-box');
+    try {
+      const field = typeof box.querySelector === 'function'
+        ? box.querySelector('textarea, [contenteditable="true"], [role="textbox"]')
+        : null;
+      const chain = [];
+      let cur = field ? field.parentElement : null;
+      while (cur && cur !== box && chain.length < 10) {
+        if (cur.tagName === 'DIV') chain.push(cur);
+        cur = cur.parentElement;
+      }
+
+      let surfaceEl = null;
+      for (let i = chain.length - 1; i >= 0; i--) {
+        const el = chain[i];
+        let isCard = false;
+        try {
+          const st = window.getComputedStyle(el);
+          const hasBg = Boolean(st && st.backgroundColor && st.backgroundColor !== 'transparent' && st.backgroundColor !== 'rgba(0, 0, 0, 0)');
+          const hasBorder = Boolean(st && (parseFloat(st.borderTopWidth) > 0 || parseFloat(st.borderBottomWidth) > 0));
+          const hasRadius = Boolean(st && parseFloat(st.borderRadius) >= 8);
+          const hasBtns = Boolean(el.querySelector && el.querySelector('button, [role="button"]'));
+          if (hasBtns && (hasBg || hasBorder || hasRadius)) {
+            isCard = true;
+          } else if (hasBg && (hasBorder || hasRadius)) {
+            isCard = true;
+          }
+        } catch (_) {}
+        if (!isCard && el.className && typeof el.className === 'string' && /(rounded|bg-card|bg-input|border)/.test(el.className)) {
+          isCard = true;
+        }
+        if (isCard) {
+          surfaceEl = el;
+          break;
+        }
+      }
+
+      const prevSurfaces = box.querySelectorAll ? box.querySelectorAll('.agy-milk-input-surface, .agy-milk-input-inner-clear') : [];
+      for (let i = 0; i < prevSurfaces.length; i++) {
+        const ps = prevSurfaces[i];
+        if (ps && ps.classList && ps !== surfaceEl) {
+          ps.classList.remove('agy-milk-input-surface', 'agy-milk-input-inner-clear');
+        }
+      }
+
+      if (surfaceEl && surfaceEl !== box) {
+        box.classList.add('agy-milk-input-shell');
+        surfaceEl.classList.add('agy-milk-input-surface');
+        surfaceEl.classList.remove('agy-milk-input-inner-clear');
+        for (let i = 0; i < chain.length; i++) {
+          const innerEl = chain[i];
+          if (innerEl === surfaceEl) break;
+          if (innerEl && innerEl.classList && (!innerEl.querySelector || !innerEl.querySelector('button, [role="button"]'))) {
+            innerEl.classList.add('agy-milk-input-inner-clear');
+          }
+        }
+      } else {
+        box.classList.remove('agy-milk-input-shell');
+      }
+    } catch (_) {}
+  }
+
   function ensureChatMessageBackdrop(stage, box, inChat) {
     ensureMilkThemeStyles();
-    if (box && box.classList) {
-      box.classList.add('agy-milk-input-box');
+    if (box) {
+      syncInputSurfaceTheme(box);
     }
     if (!inChat) {
+      syncPromptBarSpacing(null, box, false);
       clearChatMessageBackdrops();
       return;
     }
+    const feed = findScrollFeedInStage(stage, box);
+    syncPromptBarSpacing(feed, box, true);
     const targets = findChatMessageTargets(stage, box);
     const nextSet = new Set(targets);
     for (const prev of milkBackdropNodes) {
       if (!nextSet.has(prev) && prev && prev.classList) {
-        try { prev.classList.remove('agy-milk-dialog-box'); } catch (_) {}
+        try {
+          prev.classList.remove('agy-milk-dialog-box');
+          prev.classList.remove('agy-milk-dialog-framed');
+        } catch (_) {}
       }
     }
     for (const el of targets) {
@@ -3372,6 +3886,64 @@
       constrainTablesInDialogBox(el);
     }
     milkBackdropNodes = targets;
+
+    if (stage && feed && targets.length === 1 && targets[0]) {
+      const col = targets[0];
+      if (milkScrollFeedEl && milkScrollFeedEl !== feed && milkScrollFeedEl.classList) {
+        try { milkScrollFeedEl.classList.remove('agy-milk-scroll-feed'); } catch (_) {}
+      }
+      if (feed.classList && !feed.classList.contains('agy-milk-scroll-feed')) {
+        feed.classList.add('agy-milk-scroll-feed');
+      }
+      milkScrollFeedEl = feed;
+
+      if (!milkChatFrameEl) {
+        milkChatFrameEl = document.getElementById('agy-milk-chat-frame');
+      }
+      if (!milkChatFrameEl) {
+        milkChatFrameEl = document.createElement('div');
+        milkChatFrameEl.id = 'agy-milk-chat-frame';
+      }
+      const wpLayer = document.getElementById('antigravity-wallpaper-layer');
+      if (wpLayer && wpLayer.parentElement === stage) {
+        if (milkChatFrameEl.parentElement !== stage || milkChatFrameEl.previousElementSibling !== wpLayer) {
+          stage.insertBefore(milkChatFrameEl, wpLayer.nextSibling);
+        }
+      } else if (milkChatFrameEl.parentElement !== stage) {
+        stage.insertBefore(milkChatFrameEl, stage.firstChild);
+      }
+
+      if (milkScrollBoundFeed !== feed) {
+        if (milkScrollBoundFeed && milkScrollBoundFeed.__agyFrameScrollHandler) {
+          try { milkScrollBoundFeed.removeEventListener('scroll', milkScrollBoundFeed.__agyFrameScrollHandler); } catch (_) {}
+        }
+        const onFeedScroll = () => scheduleChatFrameSync();
+        feed.__agyFrameScrollHandler = onFeedScroll;
+        feed.addEventListener('scroll', onFeedScroll, { passive: true });
+        milkScrollBoundFeed = feed;
+      }
+
+      if (typeof ResizeObserver === 'function') {
+        if (!milkFrameResizeObs) {
+          milkFrameResizeObs = new ResizeObserver(() => scheduleChatFrameSync());
+        }
+        if (milkFrameFeedEl !== feed || milkFrameColEl !== col) {
+          try { milkFrameResizeObs.disconnect(); } catch (_) {}
+          try { milkFrameResizeObs.observe(feed); } catch (_) {}
+          try { milkFrameResizeObs.observe(col); } catch (_) {}
+        }
+      }
+
+      milkFrameStageEl = stage;
+      milkFrameFeedEl = feed;
+      milkFrameColEl = col;
+      syncChatFrameGeometry();
+    } else {
+      for (const el of targets) {
+        if (el && el.classList) el.classList.remove('agy-milk-dialog-framed');
+      }
+      hideChatFrameBackdrop();
+    }
   }
 
   function findMainStage(box) {
@@ -3456,7 +4028,7 @@
     }
     if (stage.children) {
       for (const ch of Array.from(stage.children)) {
-        if (ch && ch.id !== 'antigravity-wallpaper-layer' && ch.id !== 'antigravity-wallpaper-ctrl' && ch.id !== 'antigravity-wallpaper-menu' && ch.id !== 'antigravity-wp-fx-canvas' && ch.id !== 'antigravity-corner-dock' && ch !== box && (!box.contains || !box.contains(ch))) {
+        if (ch && ch.id !== 'antigravity-wallpaper-layer' && ch.id !== 'agy-milk-chat-frame' && ch.id !== 'antigravity-wallpaper-ctrl' && ch.id !== 'antigravity-wallpaper-menu' && ch.id !== 'antigravity-wp-fx-canvas' && ch.id !== 'antigravity-corner-dock' && ch !== box && (!box.contains || !box.contains(ch))) {
           candidates.push(ch);
           if (ch.children) {
             for (const sub of Array.from(ch.children)) {
@@ -3497,7 +4069,7 @@
     const gradCandidates = [];
     const collectShallow = (node, depth) => {
       if (!node || depth > 8 || node === box || (box.contains && box.contains(node))) return;
-      if (node.id === 'antigravity-wallpaper-layer' || node.id === 'antigravity-wallpaper-ctrl' || node.id === 'antigravity-wallpaper-menu' || node.id === 'antigravity-wp-fx-canvas' || node.id === 'antigravity-corner-dock') return;
+      if (node.id === 'antigravity-wallpaper-layer' || node.id === 'agy-milk-chat-frame' || node.id === 'antigravity-wallpaper-ctrl' || node.id === 'antigravity-wallpaper-menu' || node.id === 'antigravity-wp-fx-canvas' || node.id === 'antigravity-corner-dock') return;
       gradCandidates.push(node);
       if (node.children) {
         for (const ch of Array.from(node.children)) collectShallow(ch, depth + 1);
@@ -3567,7 +4139,7 @@
     if (!container || !container.children) return;
     for (const child of Array.from(container.children)) {
       if (!child || child === milkSidebarEl || child === milkHeaderEl || milkHeaderEls.includes(child)) continue;
-      if (child.id === 'antigravity-wallpaper-layer' || child.id === 'antigravity-wallpaper-ctrl' || child.id === 'antigravity-wallpaper-menu' || child.id === 'antigravity-wp-fx-canvas' || child.id === 'antigravity-corner-dock') continue;
+      if (child.id === 'antigravity-wallpaper-layer' || child.id === 'agy-milk-chat-frame' || child.id === 'antigravity-wallpaper-ctrl' || child.id === 'antigravity-wallpaper-menu' || child.id === 'antigravity-wp-fx-canvas' || child.id === 'antigravity-corner-dock') continue;
       try {
         const st = window.getComputedStyle(child);
         if (st && st.position === 'static') {
@@ -4252,7 +4824,7 @@
       else btn.classList.remove('has-subagents');
     }
     const pulseDot = activeCount > 0
-      ? '<span style="width:6px;height:6px;border-radius:9999px;background:rgb(var(--agy-accent-bright-rgb,255,68,82));box-shadow:0 0 6px rgb(var(--agy-accent-bright-rgb,255,68,82));display:inline-block;flex-shrink:0;"></span>'
+      ? '<span style="width:6px;height:6px;border-radius:2px;background:rgb(var(--agy-accent-bright-rgb,255,68,82));display:inline-block;flex-shrink:0;"></span>'
       : '';
     btn.innerHTML = `
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.92;flex-shrink:0;">
@@ -4411,17 +4983,18 @@
         'gap: 6px',
         'min-height: 31px',
         'padding: 6px 13px',
-        'border-radius: 9999px',
-        'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        'border-radius: 6px',
+        'font-family: var(--agy-font-mono, "Cascadia Mono", Consolas, monospace)',
+        'font-variant-numeric: tabular-nums',
         'font-size: 12.5px',
         'font-weight: 600',
         'line-height: 1',
-        'color: rgba(243, 244, 246, 0.92)',
-        'background: rgba(15, 15, 22, 0.72)',
-        'border: 1px solid rgba(255, 255, 255, 0.16)',
-        'backdrop-filter: blur(10px)',
+        'color: rgba(248, 240, 232, 0.92)',
+        'background: rgba(11, 12, 19, 0.84)',
+        'border: 1px solid rgba(var(--agy-accent-rgb, 198, 52, 60), 0.48)',
+        'backdrop-filter: blur(8px)',
         'cursor: pointer',
-        'opacity: 0.90',
+        'opacity: 0.92',
         'transition: opacity 0.15s ease, background 0.15s ease, border-color 0.25s ease, transform 0.12s ease'
       ].join(';');
 
@@ -4813,6 +5386,7 @@
       ctrl.title = isPinnedHere
         ? `Обои: ${curFile} [Закреплено] (ЛКМ: меню сцен и FX)`
         : `Обои: ${curFile} (ЛКМ: меню сцен и FX · ПКМ: следующая сцена)`;
+      ctrl.setAttribute('aria-label', ctrl.title);
     }
     const menu = document.getElementById('antigravity-wallpaper-menu');
     if (menu && menu.style && menu.style.display !== 'none') {
@@ -4821,11 +5395,6 @@
   }
 
   function closeWallpaperMenu(restoreFocus) {
-    wpMenuPinned = false;
-    if (wpMenuCloseTimer) {
-      clearTimeout(wpMenuCloseTimer);
-      wpMenuCloseTimer = 0;
-    }
     const menu = document.getElementById('antigravity-wallpaper-menu');
     if (menu && menu.style) {
       menu.style.display = 'none';
@@ -4833,8 +5402,13 @@
     const ctrl = document.getElementById('antigravity-wallpaper-ctrl');
     if (ctrl) {
       ctrl.setAttribute('aria-expanded', 'false');
-      if (restoreFocus && typeof ctrl.focus === 'function') {
-        try { ctrl.focus(); } catch (_) {}
+    }
+    const prev = wpPrevFocusEl;
+    wpPrevFocusEl = null;
+    if (restoreFocus) {
+      const target = (prev && prev.isConnected && typeof prev.focus === 'function') ? prev : ctrl;
+      if (target && typeof target.focus === 'function') {
+        try { target.focus(); } catch (_) {}
       }
     }
   }
@@ -4868,11 +5442,18 @@
           const active = document.activeElement;
           const menu = document.getElementById('antigravity-wallpaper-menu');
           const pop = document.getElementById('antigravity-token-popover');
-          const restoreWp = Boolean(menu && active && menu.contains && menu.contains(active));
-          const restorePop = Boolean(pop && active && pop.contains && pop.contains(active));
-          closeWallpaperMenu(restoreWp);
-          closeTokenPopover(restorePop);
-          closeSwarmModal();
+          const swarm = document.getElementById('antigravity-swarm-modal');
+          const menuOpen = Boolean(menu && menu.style && menu.style.display !== 'none');
+          const popOpen = Boolean(pop && pop.style && pop.style.display !== 'none');
+          const swarmOpen = Boolean(swarm && swarm.style && swarm.style.display !== 'none');
+          if (!menuOpen && !popOpen && !swarmOpen) return;
+          if (e.preventDefault) e.preventDefault();
+          if (e.stopPropagation) e.stopPropagation();
+          const restoreWp = Boolean(menuOpen && active && menu.contains && menu.contains(active));
+          const restorePop = Boolean(popOpen && active && pop.contains && pop.contains(active));
+          if (menuOpen) closeWallpaperMenu(restoreWp);
+          if (popOpen) closeTokenPopover(restorePop);
+          if (swarmOpen) closeSwarmModal();
         }
       };
       document.addEventListener('keydown', window.__antigravity_menu_keydown, true);
@@ -4881,6 +5462,7 @@
 
   function renderWallpaperMenu(menu) {
     if (!menu) return;
+    const prevWpFocus = captureFocusDescriptor(menu);
     menu.innerHTML = '';
 
     const currentFile = wallpaperFiles[wallpaperIndex] || '';
@@ -4892,13 +5474,14 @@
     const hdr = document.createElement('div');
     hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:8px;';
     const title = document.createElement('span');
-    title.style.cssText = 'display:inline-flex;align-items:center;gap:5px;font-weight:700;color:var(--agy-text-primary, #f8f0e8);font-size:12.5px;flex:1;';
-    title.innerHTML = `<span>Обои (${wallpaperFiles.length > 0 ? wallpaperIndex + 1 : 0}/${wallpaperFiles.length})</span>${isLockedHere ? agyIcon('pin', 12) : ''}`;
+    title.style.cssText = 'display:inline-flex;align-items:center;gap:5px;font-weight:700;color:var(--agy-text-primary, #f8f0e8);font-size:13px;flex:1;';
+    title.innerHTML = `<span>Обои <span class="agy-mono">(${wallpaperFiles.length > 0 ? wallpaperIndex + 1 : 0}/${wallpaperFiles.length})</span></span>${isLockedHere ? agyIcon('pin', 12) : ''}`;
     hdr.appendChild(title);
 
     const refreshBtn = document.createElement('button');
     refreshBtn.type = 'button';
     refreshBtn.className = 'agy-wp-menu-chip';
+    refreshBtn.setAttribute('data-wp-action', 'refresh');
     refreshBtn.style.padding = '3px 7px';
     refreshBtn.innerHTML = agyIcon('refresh', 13);
     refreshBtn.setAttribute('aria-label', 'Обновить список обоев из папки');
@@ -4914,12 +5497,27 @@
 
     const autoBtn = document.createElement('button');
     autoBtn.type = 'button';
-    autoBtn.className = `agy-wp-menu-pill ${fxPrefs.autoRotate ? 'is-on' : 'is-off'}`;
+    const autoVisualOn = !isLockedHere && Boolean(fxPrefs.autoRotate);
+    autoBtn.className = `agy-wp-menu-pill ${autoVisualOn ? 'is-on' : 'is-off'}`;
+    autoBtn.setAttribute('data-wp-action', 'auto');
     autoBtn.style.cursor = 'pointer';
-    autoBtn.setAttribute('aria-pressed', fxPrefs.autoRotate ? 'true' : 'false');
-    autoBtn.innerHTML = `${agyIcon(fxPrefs.autoRotate ? 'play' : 'pause', 11)}<span>${fxPrefs.autoRotate ? 'Авто: ВКЛ' : 'Авто: ПАУЗА'}</span>`;
+    autoBtn.setAttribute('aria-pressed', autoVisualOn ? 'true' : 'false');
+    if (isLockedHere) {
+      autoBtn.setAttribute('aria-disabled', 'true');
+      autoBtn.title = `Автопереключение приостановлено, пока сцена закреплена для «${inChat ? 'Чат' : 'Home'}»`;
+      autoBtn.innerHTML = `${agyIcon('pin', 11)}<span>Авто: ЗАКР.</span>`;
+    } else {
+      autoBtn.title = fxPrefs.autoRotate ? 'Автопереключение каждые 45с (нажмите, чтобы поставить на паузу)' : 'Включить автопереключение каждые 45с';
+      autoBtn.innerHTML = `${agyIcon(fxPrefs.autoRotate ? 'play' : 'pause', 11)}<span>${fxPrefs.autoRotate ? 'Авто: ВКЛ' : 'Авто: ПАУЗА'}</span>`;
+    }
     autoBtn.onclick = (e) => {
       e.stopPropagation();
+      const liveInChat = Boolean(getConversationIdFromLocation());
+      if (isWallpaperLockedHere(liveInChat)) {
+        triggerWallpaperLockHint(liveInChat);
+        renderWallpaperMenu(menu);
+        return;
+      }
       fxPrefs.autoRotate = !fxPrefs.autoRotate;
       if (fxPrefs.autoRotate) wallpaperLastSwitchMs = Date.now();
       saveFxPrefs();
@@ -4957,6 +5555,7 @@
       };
       tabsRow.appendChild(tb);
     }
+    wireTablistArrowKeys(tabsRow);
     menu.appendChild(tabsRow);
 
     if (wpMenuActiveTab === 'scenes') {
@@ -4992,7 +5591,7 @@
 
           const idxBadge = document.createElement('span');
           idxBadge.className = 'agy-wp-thumb-idx';
-          idxBadge.innerHTML = isVid ? `<span>${i + 1}</span>` : `${i + 1}`;
+          idxBadge.innerHTML = isVid ? `<span>${i + 1}</span>${agyIcon('play', 9)}` : `${i + 1}`;
           tile.appendChild(idxBadge);
 
           if (isHomePin || isChatPin) {
@@ -5011,9 +5610,11 @@
 
           tile.onclick = async (e) => {
             e.stopPropagation();
-            if (isWallpaperLockedHere(inChat)) {
-              if (fname !== activePinFile || wallpaperIndex !== i) {
-                triggerWallpaperLockHint(inChat);
+            const liveInChat = Boolean(getConversationIdFromLocation());
+            const livePinFile = liveInChat ? fxPrefs.chatWpFile : fxPrefs.homeWpFile;
+            if (isWallpaperLockedHere(liveInChat)) {
+              if (fname !== livePinFile || wallpaperIndex !== i) {
+                triggerWallpaperLockHint(liveInChat);
                 renderWallpaperMenu(menu);
               }
               return;
@@ -5046,55 +5647,59 @@
         const pinRow = document.createElement('div');
         pinRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;';
         const pinLbl = document.createElement('span');
-        pinLbl.style.cssText = 'font-size:11.5px;color:var(--agy-text-muted, rgba(248,224,192,0.82));';
+        pinLbl.style.cssText = 'font-size:12px;color:var(--agy-text-muted, rgba(248,224,192,0.82));';
         pinLbl.textContent = 'Закрепить текущие:';
         pinRow.appendChild(pinLbl);
 
         const pinBtns = document.createElement('div');
         pinBtns.style.cssText = 'display:flex;gap:5px;';
 
-        const homePinActive = Boolean((currentFile && fxPrefs.homeWpFile === currentFile) || (!inChat && fxPrefs.homeWpFile));
+        const homePinIdx = fxPrefs.homeWpFile ? wallpaperFiles.indexOf(fxPrefs.homeWpFile) : -1;
+        const homePinActive = homePinIdx >= 0;
         const pinHomeBtn = document.createElement('button');
         pinHomeBtn.type = 'button';
         pinHomeBtn.className = `agy-wp-menu-chip${homePinActive ? ' is-active' : ''}${wpLockHintMsg && !inChat && homePinActive ? ' is-lock-pulse' : ''}`;
         pinHomeBtn.setAttribute('data-pin-scope', 'home');
         pinHomeBtn.setAttribute('aria-pressed', homePinActive ? 'true' : 'false');
-        pinHomeBtn.innerHTML = homePinActive ? `<span>Home</span>${agyIcon('pin', 12)}` : 'Home';
-        pinHomeBtn.title = fxPrefs.homeWpFile
-          ? `На главном экране: ${fxPrefs.homeWpFile} (нажмите, чтобы открепить)`
+        pinHomeBtn.innerHTML = homePinActive ? `<span>Home #${homePinIdx + 1}</span>${agyIcon('pin', 12)}` : 'Home';
+        pinHomeBtn.title = homePinActive
+          ? `На главном экране: #${homePinIdx + 1} (${fxPrefs.homeWpFile}) — нажмите, чтобы открепить`
           : 'Закрепить текущие обои для главного экрана';
         pinHomeBtn.onclick = (e) => {
           e.stopPropagation();
-          fxPrefs.homeWpFile = homePinActive ? '' : currentFile;
+          const liveFile = wallpaperFiles[wallpaperIndex] || '';
+          fxPrefs.homeWpFile = homePinActive ? '' : liveFile;
           if (wpLockHintTimer) {
             clearTimeout(wpLockHintTimer);
             wpLockHintTimer = 0;
           }
           wpLockHintMsg = '';
           saveFxPrefs();
-          updateWallpaperCtrlLabel(currentFile);
+          updateWallpaperCtrlLabel(liveFile);
         };
 
-        const chatPinActive = Boolean((currentFile && fxPrefs.chatWpFile === currentFile) || (inChat && fxPrefs.chatWpFile));
+        const chatPinIdx = fxPrefs.chatWpFile ? wallpaperFiles.indexOf(fxPrefs.chatWpFile) : -1;
+        const chatPinActive = chatPinIdx >= 0;
         const pinChatBtn = document.createElement('button');
         pinChatBtn.type = 'button';
         pinChatBtn.className = `agy-wp-menu-chip${chatPinActive ? ' is-active' : ''}${wpLockHintMsg && inChat && chatPinActive ? ' is-lock-pulse' : ''}`;
         pinChatBtn.setAttribute('data-pin-scope', 'chat');
         pinChatBtn.setAttribute('aria-pressed', chatPinActive ? 'true' : 'false');
-        pinChatBtn.innerHTML = chatPinActive ? `<span>Чат</span>${agyIcon('pin', 12)}` : 'Чат';
-        pinChatBtn.title = fxPrefs.chatWpFile
-          ? `В чатах: ${fxPrefs.chatWpFile} (нажмите, чтобы открепить)`
+        pinChatBtn.innerHTML = chatPinActive ? `<span>Чат #${chatPinIdx + 1}</span>${agyIcon('pin', 12)}` : 'Чат';
+        pinChatBtn.title = chatPinActive
+          ? `В чатах: #${chatPinIdx + 1} (${fxPrefs.chatWpFile}) — нажмите, чтобы открепить`
           : 'Закрепить текущие обои для экранов чата';
         pinChatBtn.onclick = (e) => {
           e.stopPropagation();
-          fxPrefs.chatWpFile = chatPinActive ? '' : currentFile;
+          const liveFile = wallpaperFiles[wallpaperIndex] || '';
+          fxPrefs.chatWpFile = chatPinActive ? '' : liveFile;
           if (wpLockHintTimer) {
             clearTimeout(wpLockHintTimer);
             wpLockHintTimer = 0;
           }
           wpLockHintMsg = '';
           saveFxPrefs();
-          updateWallpaperCtrlLabel(currentFile);
+          updateWallpaperCtrlLabel(liveFile);
         };
 
         pinBtns.appendChild(pinHomeBtn);
@@ -5110,6 +5715,7 @@
           menu.appendChild(lockNote);
         }
       }
+      if (prevWpFocus) restoreFocusDescriptor(menu, prevWpFocus);
       return;
     }
 
@@ -5118,7 +5724,7 @@
     const greetRow = document.createElement('div');
     greetRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:10px;padding-bottom:9px;border-bottom:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));';
     const greetLbl = document.createElement('span');
-    greetLbl.style.cssText = 'font-size:11.5px;color:var(--agy-text-muted, rgba(248,224,192,0.82));';
+    greetLbl.style.cssText = 'font-size:12px;color:var(--agy-text-muted, rgba(248,224,192,0.82));';
     greetLbl.textContent = 'Приветствие:';
     greetRow.appendChild(greetLbl);
 
@@ -5157,11 +5763,12 @@
     const sliderWrap = document.createElement('div');
     sliderWrap.style.cssText = 'margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--agy-border-hairline, rgba(255,255,255,0.09));';
     const sliderHdr = document.createElement('div');
-    sliderHdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;font-size:11.5px;color:var(--agy-text-secondary, rgba(243,244,246,0.88));';
+    sliderHdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;font-size:12px;color:var(--agy-text-secondary, rgba(248,240,232,0.88));';
     const sliderLbl = document.createElement('label');
     sliderLbl.setAttribute('for', 'agy-wp-scrim-slider');
     sliderLbl.textContent = 'Затемнение фона';
     const sliderNum = document.createElement('span');
+    sliderNum.className = 'agy-mono';
     sliderNum.style.cssText = 'font-weight:700;color:var(--agy-text-primary, #f8f0e8);';
     sliderNum.textContent = `${scrimVal}%`;
     sliderHdr.appendChild(sliderLbl);
@@ -5175,13 +5782,15 @@
     slider.step = '5';
     slider.value = String(scrimVal);
     slider.className = 'agy-wp-slider';
+    slider.style.setProperty('--agy-slider-pct', `${scrimVal}%`);
     slider.setAttribute('aria-label', 'Затемнение фона');
     slider.oninput = (e) => {
       e.stopPropagation();
       const v = Number(slider.value);
       fxPrefs.scrimOpacity = v;
       sliderNum.textContent = `${v}%`;
-      applyScrimStyle(inChat);
+      slider.style.setProperty('--agy-slider-pct', `${v}%`);
+      applyScrimStyle(Boolean(getConversationIdFromLocation()));
     };
     slider.onchange = (e) => {
       e.stopPropagation();
@@ -5203,6 +5812,7 @@
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'agy-wp-menu-toggle';
+      row.setAttribute('data-fx-key', item.key);
       const isOn = Boolean(fxPrefs[item.key]);
       row.setAttribute('aria-pressed', isOn ? 'true' : 'false');
       const lbl = document.createElement('span');
@@ -5214,11 +5824,12 @@
       row.appendChild(pill);
       row.onclick = (e) => {
         e.stopPropagation();
+        const liveInChat = Boolean(getConversationIdFromLocation());
         fxPrefs[item.key] = !fxPrefs[item.key];
         saveFxPrefs();
         renderWallpaperMenu(menu);
         const layer = document.getElementById('antigravity-wallpaper-layer');
-        syncHomeAtmosphereFx(!isAppInactive(), !inChat && !isAppInactive(), layer);
+        syncHomeAtmosphereFx(!isAppInactive(), !liveInChat && !isAppInactive(), layer);
       };
       menu.appendChild(row);
     }
@@ -5230,6 +5841,7 @@
       const openDirBtn = document.createElement('button');
       openDirBtn.type = 'button';
       openDirBtn.className = 'agy-wp-menu-chip';
+      openDirBtn.setAttribute('data-wp-action', 'open-dir');
       openDirBtn.style.cssText = 'width:100%;padding:5px 8px;display:flex;align-items:center;justify-content:center;gap:6px;';
       openDirBtn.innerHTML = `${agyIcon('folder', 13)}<span>Открыть папку обоев</span>`;
       openDirBtn.onclick = (e) => {
@@ -5239,17 +5851,17 @@
       footer.appendChild(openDirBtn);
       menu.appendChild(footer);
     }
+    if (prevWpFocus) restoreFocusDescriptor(menu, prevWpFocus);
   }
 
   function openWallpaperMenu(stage, pinned) {
     if (!stage) return;
     installWallpaperMenuDismissListeners();
-    if (pinned) wpMenuPinned = true;
-    if (wpMenuCloseTimer) {
-      clearTimeout(wpMenuCloseTimer);
-      wpMenuCloseTimer = 0;
-    }
     let menu = document.getElementById('antigravity-wallpaper-menu');
+    const wasHidden = !menu || !menu.style || menu.style.display === 'none';
+    if (wasHidden) {
+      wpPrevFocusEl = document.activeElement || null;
+    }
     if (!menu) {
       menu = document.createElement('div');
       menu.id = 'antigravity-wallpaper-menu';
@@ -5264,10 +5876,17 @@
     menu.style.display = 'block';
     const ctrl = document.getElementById('antigravity-wallpaper-ctrl');
     if (ctrl) ctrl.setAttribute('aria-expanded', 'true');
+    if (wasHidden) {
+      const wpFocusTarget = menu.querySelector && (menu.querySelector('[role="tab"][aria-selected="true"]') || menu.querySelector('button'));
+      if (wpFocusTarget && typeof wpFocusTarget.focus === 'function') {
+        try { wpFocusTarget.focus({ preventScroll: true }); } catch (_) { try { wpFocusTarget.focus(); } catch (__) {} }
+      }
+    }
   }
 
   // Instant navigation listeners for SPA URL changes & New Conversation clicks
   function handlePossibleNavigation() {
+    lastOverviewTreeWalkMs = 0;
     const id = getConversationIdFromLocation();
     if (!id) {
       currentActiveConvId = null;

@@ -11,7 +11,7 @@
 <p>
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-0b0c13?style=for-the-badge&labelColor=c6343c" alt="Platform Windows 10/11" />
   <img src="https://img.shields.io/badge/Antigravity-v2.32%20--%20v2.33%2B%20%7C%20Electron%2044%2B-c6343c?style=for-the-badge&labelColor=0b0c13" alt="Target Antigravity v2.33+" />
-  <img src="https://img.shields.io/badge/Gemini-3.8%20Flash%20%7C%20Hydrogen%20%7C%20Argon%20%7C%20Carbon-8b222a?style=for-the-badge&labelColor=0b0c13" alt="Supported Models" />
+  <img src="https://img.shields.io/badge/Gemini-3.8%20Flash%20%7C%20Hydrogen%20%7C%20Neon%20%7C%20Argon%20%7C%20Carbon-8b222a?style=for-the-badge&labelColor=0b0c13" alt="Supported Models" />
   <img src="https://img.shields.io/badge/Wallpapers-12%20FHD%20(11%20PNG%20%2B%201%20MP4)-0b0c13?style=for-the-badge&labelColor=8b222a" alt="12 Wallpapers Included" />
 </p>
 
@@ -49,7 +49,7 @@
 | **Раздельные пины и нормализованный `0–100%` scrim:** независимое закрепление обоев для `Home` и `Чат` с хранением в `fx_prefs.json`, авторотация (выключена по умолчанию), плавный параллакс камеры, спотлайт, CRT-сканлайны и VHS-переключение | **Расчёт API + Инспектор контекста:** разбивка стоимости `Input / Cache / Output` по чату и субагентам, список частых инструментов и файлов с подсветкой повторных чтений |
 | **Чистые таблицы и диалоги:** карточки сообщений со сглаженным фоном и автоматическое удержание широких Markdown-таблиц и блоков кода строго внутри колонки чата (`constrainTablesInDialogBox`) | **Интерактивное SVG-дерево роя:** иерархия вызовов `invoke_subagent`, 2-строчные карточки с задачами и последним инструментом, резкий SVG-зум, Pointer Events перетаскивание и навигация с клавиатуры |
 
-> **Поддержка моделей:** в прайсинге и детекторе поддержаны **Gemini 3.8 Flash**, **Gemini 4 Hydrogen**, **Gemini 4 Argon** и **Gemini 4 Carbon** (контекстное окно `1M`, распознавание триггера выбора модели игнорирует прикреплённые файлы). При необходимости расширьте `modelPattern` и `__resolveModelPricing` по инструкции ниже.
+> **Поддержка моделей:** в прайсинге и детекторе поддержаны **Gemini 3.8 Flash**, **Gemini 4 Hydrogen**, **Gemini 4 Neon**, **Gemini 4 Argon** и **Gemini 4 Carbon** (контекстное окно `1M`, распознавание триггера выбора модели игнорирует прикреплённые файлы). При необходимости расширьте `modelPattern` и `__resolveModelPricing` по инструкции ниже.
 
 ---
 

@@ -23,6 +23,8 @@ if (-not $toolsDir -or -not (Test-Path $toolsDir)) {
     $toolsDir = "$env:USERPROFILE\.gemini\antigravity\tools"
 }
 $modFile = Join-Path $toolsDir "antigravity_core_mod.js"
+$runtimeToolsDir = "$env:USERPROFILE\.gemini\antigravity\tools"
+$runtimeModFile = Join-Path $runtimeToolsDir "antigravity_core_mod.js"
 $prebuiltAsar = Join-Path $toolsDir "app.asar.patched"
 $scriptPath = $MyInvocation.MyCommand.Path
 
@@ -97,6 +99,21 @@ if (-not (Test-Path $asarPath)) {
 if (-not (Test-Path $modFile)) {
     Write-Host "Ошибка: файл улучшений не найден: $modFile" -ForegroundColor Red
     exit 1
+}
+
+if (-not $Restore) {
+    try {
+        $resolvedSrcMod = [System.IO.Path]::GetFullPath($modFile)
+        $resolvedDstMod = [System.IO.Path]::GetFullPath($runtimeModFile)
+        if ($resolvedSrcMod -ne $resolvedDstMod) {
+            if (-not (Test-Path $runtimeToolsDir)) {
+                New-Item -ItemType Directory -Path $runtimeToolsDir -Force | Out-Null
+            }
+            Copy-Item -Path $modFile -Destination $runtimeModFile -Force
+        }
+    } catch {
+        Write-Host "      Предупреждение: не удалось синхронизировать $runtimeModFile : $($_.Exception.Message)" -ForegroundColor Yellow
+    }
 }
 
 # 0. Check running processes (skipped in BuildOnly mode)
@@ -293,6 +310,7 @@ try {
 
     $ipcHandlerCode = @'
     // Antigravity Token Stats IPC Handler BEGIN
+    const __agyElectronIpc = (typeof electron_1 !== 'undefined') ? electron_1 : require('electron');
     const __tokenStatsCache = new Map();
     const __tokenLiveTracker = new Map();
 
@@ -341,6 +359,9 @@ try {
 
         if (/hydrogen/.test(name)) {
             return { label: 'Gemini 4 Hydrogen', input: 1.50, cache: 0.075, output: 7.50 };
+        }
+        if (/neon/.test(name)) {
+            return { label: 'Gemini 4 Neon', input: 3.00, cache: 0.15, output: 15.00 };
         }
         if (/argon/.test(name)) {
             return afterDec2026
@@ -487,6 +508,7 @@ try {
                 state.pendingSubagentRoles = [];
                 state.pendingSubagentTasks = [];
                 state.pendingSubagentTypes = [];
+                state.pendingSubagentModels = [];
                 const uTask = __cleanTaskSummary(typeof item.content === 'string' ? item.content : '', 220);
                 if (uTask) {
                     if (!state.firstUserTask) state.firstUserTask = uTask;
@@ -770,6 +792,7 @@ try {
                                         JSON.parse(remText);
                                         __applyTranscriptLines(state, remText);
                                         state.byteOffset = startOffset + totalRead;
+                                        incompleteRetries = 0;
                                     } catch (_) {
                                         incompleteRetries++;
                                     }
@@ -811,15 +834,15 @@ try {
         return cached;
     }
 
-    electron_1.ipcMain.handle('antigravity:get-token-stats', async (_event, convId, modelName) => {
+    __agyElectronIpc.ipcMain.handle('antigravity:get-token-stats', async (_event, convId, modelName) => {
         try {
             const nodeFs = require('fs');
             const nodePath = require('path');
             const nodeOs = require('os');
             const { limit: modelLimit, label: modelLimitLabel } = __resolveModelLimit(modelName);
             const nowMs = Date.now();
-            const pricing = __resolveModelPricing(modelName, nowMs);
-            const pricingLabel = `${pricing.label} · $${__formatRateShort(pricing.input)}/$${__formatRateShort(pricing.cache)}/$${__formatRateShort(pricing.output)}`;
+            const defaultPricing = __resolveModelPricing(modelName, nowMs);
+            const defaultPricingLabel = `${defaultPricing.label} · $${__formatRateShort(defaultPricing.input)}/$${__formatRateShort(defaultPricing.cache)}/$${__formatRateShort(defaultPricing.output)}`;
 
             const defaultZero = {
                 turns: 0,
@@ -857,7 +880,7 @@ try {
                 apiCostInput: '$0.00',
                 apiCostCache: '$0.00',
                 apiCostOutput: '$0.00',
-                pricingLabel,
+                pricingLabel: defaultPricingLabel,
                 contextInspector: {
                     summary: { reads: 0, edits: 0, cmds: 0, web: 0, mcp: 0, subagents: 0, other: 0, total: 0, approxTokens: '0' },
                     topTools: [],
@@ -871,6 +894,10 @@ try {
             if (!cached) return defaultZero;
 
             const state = cached.state;
+            const chatPricingTs = state.lastActivityMs || cached.mtimeMs || nowMs;
+            const pricing = __resolveModelPricing(modelName, chatPricingTs);
+            const pricingLabel = `${pricing.label} · $${__formatRateShort(pricing.input)}/$${__formatRateShort(pricing.cache)}/$${__formatRateShort(pricing.output)}`;
+
             let live = __tokenLiveTracker.get(convId);
             if (!live) {
                 live = {
@@ -880,7 +907,13 @@ try {
                     liveSpeed: 0
                 };
                 __tokenLiveTracker.set(convId, live);
+                if (__tokenLiveTracker.size > 128) {
+                    const oldestLiveKey = __tokenLiveTracker.keys().next().value;
+                    if (oldestLiveKey && oldestLiveKey !== convId) __tokenLiveTracker.delete(oldestLiveKey);
+                }
             } else {
+                __tokenLiveTracker.delete(convId);
+                __tokenLiveTracker.set(convId, live);
                 if (state.plannerSteps > live.lastPlannerSteps && live.waitStartMs && state.pendingPlanner && state.pendingPlanner.output > 0) {
                     const elapsedSec = (nowMs - live.waitStartMs) / 1000;
                     if (elapsedSec >= 0.2 && elapsedSec < 120) {
@@ -943,7 +976,8 @@ try {
                 subagentCount++;
                 const subTok = (ss.totalInput + ss.totalCache + ss.totalOutput);
                 const subMs = __getNodeActiveTimeMs(ss);
-                const subPricing = modelMap[subId] ? __resolveModelPricing(modelMap[subId], nowMs) : pricing;
+                const subPricingTs = ss.lastActivityMs || subCached.mtimeMs || chatPricingTs;
+                const subPricing = modelMap[subId] ? __resolveModelPricing(modelMap[subId], subPricingTs) : pricing;
                 const subC = __calculateNodeCost(ss, subPricing);
                 subagentTotal += subTok;
                 subagentWorkTimeMs += subMs;
@@ -1128,7 +1162,7 @@ try {
         '.webm': 'video/webm'
     };
 
-    electron_1.ipcMain.handle('antigravity:list-wallpapers', async () => {
+    __agyElectronIpc.ipcMain.handle('antigravity:list-wallpapers', async () => {
         try {
             const nodeFs = require('fs');
             const nodePath = require('path');
@@ -1149,7 +1183,7 @@ try {
         }
     });
 
-    electron_1.ipcMain.handle('antigravity:read-wallpaper', async (_event, fileName) => {
+    __agyElectronIpc.ipcMain.handle('antigravity:read-wallpaper', async (_event, fileName) => {
         try {
             const nodeFs = require('fs');
             const nodePath = require('path');
@@ -1177,15 +1211,15 @@ try {
         }
     });
 
-    electron_1.ipcMain.handle('antigravity:open-wallpapers-dir', async () => {
+    __agyElectronIpc.ipcMain.handle('antigravity:open-wallpapers-dir', async () => {
         try {
             const nodeFs = require('fs');
             const nodePath = require('path');
             const nodeOs = require('os');
             const wallDir = nodePath.join(nodeOs.homedir(), '.gemini', 'antigravity', 'wallpapers');
             await nodeFs.promises.mkdir(wallDir, { recursive: true });
-            if (electron_1.shell && typeof electron_1.shell.openPath === 'function') {
-                await electron_1.shell.openPath(wallDir);
+            if (__agyElectronIpc.shell && typeof __agyElectronIpc.shell.openPath === 'function') {
+                await __agyElectronIpc.shell.openPath(wallDir);
                 return true;
             }
             return false;
@@ -1194,7 +1228,7 @@ try {
         }
     });
 
-    electron_1.ipcMain.handle('antigravity:get-fx-prefs', async () => {
+    __agyElectronIpc.ipcMain.handle('antigravity:get-fx-prefs', async () => {
         try {
             const nodeFs = require('fs');
             const nodePath = require('path');
@@ -1208,7 +1242,7 @@ try {
         }
     });
 
-    electron_1.ipcMain.handle('antigravity:set-fx-prefs', async (_event, nextPrefs) => {
+    __agyElectronIpc.ipcMain.handle('antigravity:set-fx-prefs', async (_event, nextPrefs) => {
         try {
             if (!nextPrefs || typeof nextPrefs !== 'object' || Array.isArray(nextPrefs)) {
                 return false;
